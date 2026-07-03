@@ -1,11 +1,13 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::ensure_admin;
 use crate::AppState;
 
 pub async fn get_config(
@@ -22,8 +24,10 @@ pub async fn get_config(
 
 pub async fn update_config(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<UpdateLLMConfig>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let existing = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await

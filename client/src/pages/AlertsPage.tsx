@@ -295,15 +295,26 @@ function RuleEditor({
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [previewMode, setPreviewMode] = useState(true);
 
-  // Columns available from the selected metric's cached result.
-  const columns = useMemo(() => {
-    const metric = metrics.find((m) => m.id === metricId);
-    const cache = metric?.result_cache;
-    if (Array.isArray(cache) && cache.length > 0 && typeof cache[0] === 'object' && cache[0]) {
-      return Object.keys(cache[0] as Record<string, unknown>);
-    }
-    return [];
-  }, [metricId, metrics]);
+  // Columns available from the selected metric's cached result. The metrics
+  // list no longer carries `result_cache`, so fetch the single metric to read
+  // its column names.
+  const [columns, setColumns] = useState<string[]>([]);
+  useEffect(() => {
+    if (!metricId) { setColumns([]); return; }
+    let cancelled = false;
+    metricsApi.get(metricId as number)
+      .then((full) => {
+        if (cancelled) return;
+        const cache = full.result_cache;
+        if (Array.isArray(cache) && cache.length > 0 && typeof cache[0] === 'object' && cache[0]) {
+          setColumns(Object.keys(cache[0] as Record<string, unknown>));
+        } else {
+          setColumns([]);
+        }
+      })
+      .catch(() => { if (!cancelled) setColumns([]); });
+    return () => { cancelled = true; };
+  }, [metricId]);
 
   const parsedRecipients = () =>
     recipients.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);

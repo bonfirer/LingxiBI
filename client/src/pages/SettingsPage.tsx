@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FloppyDisk, Lightning, Check, X, CaretDown, Sliders } from '@phosphor-icons/react';
-import { llmConfigApi, type LLMConfig, type UpdateLLMConfigPayload } from '../lib/api';
+import { FloppyDisk, Lightning, Check, X, CaretDown, Sliders, Users, Plus, Trash } from '@phosphor-icons/react';
+import { llmConfigApi, usersApi, type LLMConfig, type UpdateLLMConfigPayload, type User } from '../lib/api';
+import { getCurrentUser, isAdmin } from '../lib/currentUser';
 
 // ── Provider presets ──
 
@@ -170,6 +171,8 @@ export default function SettingsPage() {
     );
   }
 
+  const admin = isAdmin();
+
   return (
     <div className="p-6 max-w-2xl">
       <div>
@@ -180,6 +183,13 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-6 space-y-5">
+        {!admin && (
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl p-5 text-xs text-gray-400">
+            {t('settings.memberNotice')}
+          </div>
+        )}
+
+        {admin && (
         <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl p-5">
           <h2 className="text-sm font-semibold text-gray-200 mb-4">
             {t('settings.llmProvider')}
@@ -405,7 +415,165 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
+        )}
+
+        {admin && <UsersPanel />}
       </div>
+    </div>
+  );
+}
+
+// ── Admin: user management ──
+function UsersPanel() {
+  const { t } = useTranslation();
+  const me = getCurrentUser();
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  // New-user form
+  const [showNew, setShowNew] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [role, setRole] = useState('member');
+  const [busy, setBusy] = useState(false);
+
+  const flash = (type: 'ok' | 'err', text: string) => {
+    setMsg({ type, text });
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  const load = () => {
+    setLoading(true);
+    usersApi.list()
+      .then(setUsers)
+      .catch((e) => flash('err', e instanceof Error ? e.message : 'Failed to load users'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleCreate = async () => {
+    if (!username.trim() || password.length < 8) {
+      flash('err', t('settings.users.validation'));
+      return;
+    }
+    setBusy(true);
+    try {
+      await usersApi.create({ username: username.trim(), password, display_name: displayName.trim() || undefined, role });
+      setUsername(''); setPassword(''); setDisplayName(''); setRole('member');
+      setShowNew(false);
+      flash('ok', t('settings.users.created'));
+      load();
+    } catch (e) {
+      flash('err', e instanceof Error ? e.message : 'Failed to create user');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (u: User) => {
+    if (!confirm(t('settings.users.deleteConfirm', { name: u.username }))) return;
+    try {
+      await usersApi.delete(u.id);
+      flash('ok', t('settings.users.deleted'));
+      load();
+    } catch (e) {
+      flash('err', e instanceof Error ? e.message : 'Failed to delete user');
+    }
+  };
+
+  const handleToggleRole = async (u: User) => {
+    const next = u.role === 'admin' ? 'member' : 'admin';
+    try {
+      await usersApi.update(u.id, { role: next });
+      load();
+    } catch (e) {
+      flash('err', e instanceof Error ? e.message : 'Failed to update role');
+    }
+  };
+
+  const inputCls = 'w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition-premium';
+
+  return (
+    <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+          <Users size={15} className="text-amber-500" />
+          {t('settings.users.title')}
+        </h2>
+        <div className="flex items-center gap-2">
+          {msg && (
+            <span className={`text-[11px] px-2 py-1 rounded ${msg.type === 'ok' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+              {msg.text}
+            </span>
+          )}
+          <button
+            onClick={() => setShowNew((v) => !v)}
+            className="flex items-center gap-1 bg-amber-500 hover:bg-amber-400 text-[#08080c] font-semibold text-[11px] px-2.5 py-1.5 rounded-md transition-premium"
+          >
+            <Plus size={12} weight="bold" />
+            {t('settings.users.add')}
+          </button>
+        </div>
+      </div>
+
+      {showNew && (
+        <div className="grid grid-cols-2 gap-2 mb-4 p-3 bg-obsidian-950/50 rounded-lg border border-obsidian-700">
+          <input className={inputCls} placeholder={t('settings.users.username')} value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input className={inputCls} placeholder={t('settings.users.displayName')} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          <input className={inputCls} type="password" placeholder={t('settings.users.password')} value={password} onChange={(e) => setPassword(e.target.value)} />
+          <select className={inputCls} value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="member">{t('settings.users.roleMember')}</option>
+            <option value="admin">{t('settings.users.roleAdmin')}</option>
+          </select>
+          <div className="col-span-2 flex justify-end gap-2">
+            <button onClick={() => setShowNew(false)} className="text-[11px] text-gray-400 hover:text-gray-200 px-3 py-1.5 rounded-md border border-obsidian-700">
+              {t('common.cancel')}
+            </button>
+            <button onClick={handleCreate} disabled={busy} className="text-[11px] text-[#08080c] bg-amber-500 hover:bg-amber-400 font-semibold px-3 py-1.5 rounded-md disabled:opacity-50">
+              {busy ? t('common.loading') : t('common.save')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-xs text-gray-500 py-4 text-center">{t('common.loading')}</div>
+      ) : (
+        <div className="space-y-1">
+          {users.map((u) => (
+            <div key={u.id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-obsidian-800/50 transition-premium">
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-gray-200 font-medium truncate">
+                  {u.display_name || u.username}
+                  {me?.id === u.id && <span className="text-[9px] text-gray-500 ml-1.5">({t('settings.users.you')})</span>}
+                </div>
+                <div className="text-[10px] text-gray-500">@{u.username}</div>
+              </div>
+              <button
+                onClick={() => handleToggleRole(u)}
+                disabled={me?.id === u.id}
+                title={t('settings.users.toggleRole')}
+                className={`text-[9px] px-2 py-0.5 rounded-full font-medium transition-premium disabled:opacity-50 disabled:cursor-not-allowed ${
+                  u.role === 'admin' ? 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25' : 'bg-obsidian-700 text-gray-400 hover:bg-obsidian-600'
+                }`}
+              >
+                {u.role === 'admin' ? t('settings.users.roleAdmin') : t('settings.users.roleMember')}
+              </button>
+              <button
+                onClick={() => handleDelete(u)}
+                disabled={me?.id === u.id}
+                className="text-gray-600 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed transition-premium"
+                title={t('common.delete')}
+              >
+                <Trash size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

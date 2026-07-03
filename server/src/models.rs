@@ -96,6 +96,7 @@ pub struct Conversation {
     pub title: Option<String>,
     pub generation_status: Option<String>,
     pub generation_error: Option<String>,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -143,6 +144,7 @@ pub struct Report {
     pub generation_error: Option<String>,
     pub style_key: Option<String>,
     pub design_score: Option<serde_json::Value>,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -161,6 +163,10 @@ pub struct LLMConfig {
     pub id: i32,
     pub provider: String,
     pub base_url: String,
+    // The config endpoints return a masked key via `mask_config`. `skip_serializing`
+    // is defense-in-depth so the raw key can never leak even if some future
+    // endpoint returns this struct directly.
+    #[serde(skip_serializing)]
     pub api_key: String,
     pub model: String,
     pub max_tokens: i32,
@@ -227,6 +233,7 @@ pub struct ReportTheme {
     pub sample_html: Option<String>,
     pub emoji: String,
     pub source_report_id: Option<i32>,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -295,6 +302,7 @@ pub struct ReportGroup {
     pub name: String,
     pub description: Option<String>,
     pub sort_order: i32,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -320,6 +328,7 @@ pub struct MetricGroup {
     pub name: String,
     pub description: Option<String>,
     pub sort_order: i32,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -350,6 +359,7 @@ pub struct MetricPool {
     pub result_cache: Option<serde_json::Value>,
     pub row_count: Option<i32>,
     pub source_pool_id: Option<i32>,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -486,6 +496,7 @@ pub struct MetricSnapshotSchedule {
     pub retention_days: Option<i32>,
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
     pub next_run_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -636,6 +647,7 @@ pub struct AlertRule {
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
     pub next_run_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_triggered_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }

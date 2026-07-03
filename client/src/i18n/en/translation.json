@@ -52,7 +52,16 @@
       "title": "No data sources configured",
       "description": "Connect your first database to begin exploring schemas and generating reports.",
       "selectOrAdd": "Select or add a data source",
-      "selectOrAddDesc": "Select a data source from the left panel, or add a new one to get started."
+      "selectOrAddDesc": "Select a data source from the left panel, or add a new one to get started.",
+      "noAccessTitle": "No data sources available",
+      "noAccessDesc": "You don't have access to any data sources yet. Ask an administrator to grant you access."
+    },
+    "access": {
+      "button": "Access",
+      "title": "Access · {{name}}",
+      "desc": "Choose which members can use this data source (view schema, run queries, build reports).",
+      "adminsNote": "Admins always have access: {{names}}",
+      "noMembers": "No member accounts yet. Create members in Settings."
     },
     "deleteConfirm": {
       "title": "Delete Data Source",
@@ -417,7 +426,23 @@
     "logInput": "Input (Prompt)",
     "logOutput": "Output (AI Response)",
     "logError": "Error Detail",
-    "logNoDetail": "No input/output detail recorded"
+    "logNoDetail": "No input/output detail recorded",
+    "memberNotice": "Workspace settings (AI provider, connections, alerts) are managed by an administrator.",
+    "users": {
+      "title": "Users",
+      "add": "Add user",
+      "username": "Username",
+      "displayName": "Display name",
+      "password": "Password (min 8 chars)",
+      "roleMember": "Member",
+      "roleAdmin": "Admin",
+      "you": "you",
+      "toggleRole": "Toggle admin/member",
+      "created": "User created",
+      "deleted": "User deleted",
+      "validation": "Username required and password must be at least 8 characters.",
+      "deleteConfirm": "Delete user \"{{name}}\"? Their reports and data are not deleted."
+    }
   },
   "aiPanel": {
     "newChat": "New chat",

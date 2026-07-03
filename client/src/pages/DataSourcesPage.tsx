@@ -13,6 +13,7 @@ import {
   Terminal,
   Play,
   PencilSimple,
+  Key,
 } from '@phosphor-icons/react';
 import {
   datasourcesApi,
@@ -20,16 +21,19 @@ import {
   queryApi,
   tableDescriptionsApi,
   columnDescriptionsApi,
+  usersApi,
   type CreateDataSourcePayload,
   type KnowledgeGraph,
   type GraphNode,
   type GraphEdge,
   type ColumnInfo,
   type QueryResult,
+  type User,
 } from '../lib/api';
 import { PageHeader, ErrorBanner, EmptyState, StatusDot, ConfirmDialog } from '../components/ui';
 import KnowledgeBasePanel from '../components/KnowledgeBasePanel';
 import { useDataSourceStore } from '../stores/datasourceStore';
+import { isAdmin } from '../lib/currentUser';
 
 // ── Constants ──
 
@@ -480,6 +484,7 @@ function TableDetailPanel({ table, edges, datasourceId, onClose }: {
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const admin = isAdmin();
   const relatedEdges = edges.filter((e) => e.source === table.id || e.target === table.id);
 
   const [description, setDescription] = useState('');
@@ -563,7 +568,7 @@ function TableDetailPanel({ table, edges, datasourceId, onClose }: {
         <div className="mb-4">
           <div className="flex items-center justify-between mb-1.5 px-1">
             <span className="text-[9px] text-gray-500 uppercase tracking-wider">{t('kg.tableDesc')}</span>
-            {!editing && (
+            {admin && !editing && (
               <button
                 onClick={() => { setDraft(description); setEditing(true); }}
                 className="text-[9px] text-amber-500 hover:text-amber-400 flex items-center gap-0.5 transition-premium"
@@ -617,7 +622,7 @@ function TableDetailPanel({ table, edges, datasourceId, onClose }: {
               col={col}
               description={colDescs[col.name] || ''}
               onSave={(val) => handleSaveColumn(col.name, val)}
-              editable={datasourceId != null}
+              editable={datasourceId != null && admin}
             />
           ))}
         </div>
@@ -937,10 +942,13 @@ export default function DataSourcesPage() {
   const selectedDsId = dsIdParam ? parseInt(dsIdParam) : null;
   const selectedDs = sources.find((s) => s.id === selectedDsId) || null;
 
+  const admin = isAdmin();
+
   // Action states
   const [testingId, setTestingId] = useState<number | null>(null);
   const [introspectingId, setIntrospectingId] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [showGrants, setShowGrants] = useState(false);
 
   // Knowledge graph
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
@@ -1151,16 +1159,18 @@ export default function DataSourcesPage() {
         ) : (
           <EmptyState
             icon={Plug}
-            title={t('datasources.empty.selectOrAdd')}
-            description={t('datasources.empty.selectOrAddDesc')}
+            title={admin ? t('datasources.empty.selectOrAdd') : t('datasources.empty.noAccessTitle')}
+            description={admin ? t('datasources.empty.selectOrAddDesc') : t('datasources.empty.noAccessDesc')}
             action={
-              <button
-                onClick={() => setShowForm(true)}
-                className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-[#08080c] font-semibold text-xs px-4 py-2 rounded-lg transition-premium active:translate-y-[1px]"
-              >
-                <Plus size={14} weight="bold" />
-                {t('datasources.connectDatabase')}
-              </button>
+              admin ? (
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-[#08080c] font-semibold text-xs px-4 py-2 rounded-lg transition-premium active:translate-y-[1px]"
+                >
+                  <Plus size={14} weight="bold" />
+                  {t('datasources.connectDatabase')}
+                </button>
+              ) : undefined
             }
           />
         )}
@@ -1193,30 +1203,45 @@ export default function DataSourcesPage() {
           }
           action={
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleTest}
-                disabled={testingId === selectedDsId}
-                className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium disabled:opacity-50"
-              >
-                <Lightning size={12} />
-                {testingId === selectedDsId ? t('settings.testing') : t('common.test')}
-              </button>
-              <button
-                onClick={handleIntrospect}
-                disabled={introspectingId === selectedDsId}
-                className="flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 bg-amber-500/5 hover:bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-md transition-premium disabled:opacity-50"
-              >
-                <MagnifyingGlass size={12} />
-                {introspectingId === selectedDsId ? t('datasources.scanning') : t('datasources.introspect')}
-              </button>
-              <button
-                onClick={handleRefreshGraph}
-                disabled={graphLoading}
-                className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium disabled:opacity-50"
-              >
-                <ArrowClockwise size={12} />
-                {t('common.refresh')}
-              </button>
+              {admin && (
+                <button
+                  onClick={handleTest}
+                  disabled={testingId === selectedDsId}
+                  className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium disabled:opacity-50"
+                >
+                  <Lightning size={12} />
+                  {testingId === selectedDsId ? t('settings.testing') : t('common.test')}
+                </button>
+              )}
+              {admin && (
+                <button
+                  onClick={handleIntrospect}
+                  disabled={introspectingId === selectedDsId}
+                  className="flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 bg-amber-500/5 hover:bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-md transition-premium disabled:opacity-50"
+                >
+                  <MagnifyingGlass size={12} />
+                  {introspectingId === selectedDsId ? t('datasources.scanning') : t('datasources.introspect')}
+                </button>
+              )}
+              {admin && (
+                <button
+                  onClick={handleRefreshGraph}
+                  disabled={graphLoading}
+                  className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium disabled:opacity-50"
+                >
+                  <ArrowClockwise size={12} />
+                  {t('common.refresh')}
+                </button>
+              )}
+              {admin && (
+                <button
+                  onClick={() => setShowGrants(true)}
+                  className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium"
+                >
+                  <Key size={12} />
+                  {t('datasources.access.button')}
+                </button>
+              )}
               <div className="relative">
                 <MagnifyingGlass size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
                 <input
@@ -1238,17 +1263,27 @@ export default function DataSourcesPage() {
                 <Terminal size={12} />
                 SQL
               </button>
-              <button
-                onClick={() => setShowDeleteConfirm(true)}
-                className="text-gray-600 hover:text-red-400 p-1.5 rounded transition-premium"
-                title={t('common.delete')}
-                aria-label={t('common.delete')}
-              >
-                <Trash size={14} />
-              </button>
+              {admin && (
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="text-gray-600 hover:text-red-400 p-1.5 rounded transition-premium"
+                  title={t('common.delete')}
+                  aria-label={t('common.delete')}
+                >
+                  <Trash size={14} />
+                </button>
+              )}
             </div>
           }
         />
+
+        {admin && showGrants && selectedDsId != null && (
+          <GrantsModal
+            datasourceId={selectedDsId}
+            datasourceName={selectedDs?.name || `#${selectedDsId}`}
+            onClose={() => setShowGrants(false)}
+          />
+        )}
 
         {/* Error banner */}
         {error && (
@@ -1673,6 +1708,117 @@ function DataSourceForm({
           className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 disabled:bg-obsidian-700 disabled:text-gray-600 text-[#08080c] font-semibold text-xs px-4 py-2 rounded-lg transition-premium active:translate-y-[1px]">
           {submitting ? t('datasources.adding') : t('datasources.connectDatabase')}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Datasource access grants modal (admin only) ──
+function GrantsModal({
+  datasourceId,
+  datasourceName,
+  onClose,
+}: {
+  datasourceId: number;
+  datasourceName: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [users, setUsers] = useState<User[]>([]);
+  const [granted, setGranted] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([usersApi.list(), datasourcesApi.listGrants(datasourceId)])
+      .then(([us, g]) => { setUsers(us); setGranted(new Set(g)); })
+      .catch((e) => setErr(e instanceof Error ? e.message : 'Failed to load'))
+      .finally(() => setLoading(false));
+  }, [datasourceId]);
+
+  const admins = users.filter((u) => u.role === 'admin');
+  const members = users.filter((u) => u.role !== 'admin');
+
+  const toggle = (id: number) =>
+    setGranted((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+
+  const save = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      // Admins always have access implicitly, so only member grants are sent.
+      const memberIds = new Set(members.map((m) => m.id));
+      await datasourcesApi.setGrants(datasourceId, Array.from(granted).filter((id) => memberIds.has(id)));
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl w-[420px] max-h-[80vh] flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-obsidian-700 flex-shrink-0">
+          <h3 className="text-sm font-semibold text-gray-100 flex items-center gap-2">
+            <Key size={15} className="text-amber-500" />
+            {t('datasources.access.title', { name: datasourceName })}
+          </h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto scrollbar-thin">
+          <p className="text-[11px] text-gray-500 mb-3">{t('datasources.access.desc')}</p>
+
+          {err && <div className="text-[11px] text-red-400 bg-red-500/10 rounded px-2 py-1.5 mb-3">{err}</div>}
+
+          {loading ? (
+            <div className="text-xs text-gray-500 py-4 text-center">{t('common.loading')}</div>
+          ) : (
+            <>
+              {members.length === 0 && (
+                <p className="text-[11px] text-gray-600 italic">{t('datasources.access.noMembers')}</p>
+              )}
+              <div className="space-y-1">
+                {members.map((u) => (
+                  <label key={u.id} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-obsidian-800/50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={granted.has(u.id)}
+                      onChange={() => toggle(u.id)}
+                      className="accent-amber-500"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs text-gray-200 truncate">{u.display_name || u.username}</div>
+                      <div className="text-[10px] text-gray-500">@{u.username}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              {admins.length > 0 && (
+                <p className="text-[10px] text-gray-600 mt-3 pt-3 border-t border-obsidian-700/50">
+                  {t('datasources.access.adminsNote', { names: admins.map((a) => a.username).join(', ') })}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-obsidian-700 flex-shrink-0">
+          <button onClick={onClose} className="text-[11px] text-gray-400 hover:text-gray-200 px-3 py-1.5 rounded-md border border-obsidian-700">
+            {t('common.cancel')}
+          </button>
+          <button onClick={save} disabled={saving || loading} className="text-[11px] text-[#08080c] bg-amber-500 hover:bg-amber-400 font-semibold px-4 py-1.5 rounded-md disabled:opacity-50">
+            {saving ? t('common.loading') : t('common.save')}
+          </button>
+        </div>
       </div>
     </div>
   );

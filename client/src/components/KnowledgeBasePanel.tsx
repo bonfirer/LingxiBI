@@ -4,6 +4,7 @@ import {
   Brain, Plus, Trash, PencilSimple, Check, X, CaretDown, CaretRight,
 } from '@phosphor-icons/react';
 import { knowledgeBaseApi, type KnowledgeEntry } from '../lib/api';
+import { isAdmin } from '../lib/currentUser';
 
 const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
   relation: { label: '表关系', color: 'bg-blue-400/10 text-blue-400 border-blue-400/20' },
@@ -14,6 +15,7 @@ const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
 
 export default function KnowledgeBasePanel({ datasourceId }: { datasourceId: number }) {
   const { t } = useTranslation();
+  const admin = isAdmin();
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(true);
@@ -83,12 +85,14 @@ export default function KnowledgeBasePanel({ datasourceId }: { datasourceId: num
           <span className="text-xs font-semibold text-gray-200">{t('kb.title')}</span>
           <span className="text-[9px] text-gray-500">({entries.length})</span>
         </div>
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowAdd(true); setExpanded(true); }}
-          className="text-amber-500 hover:text-amber-400 transition-premium"
-        >
-          <Plus size={14} />
-        </button>
+        {admin && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowAdd(true); setExpanded(true); }}
+            className="text-amber-500 hover:text-amber-400 transition-premium"
+          >
+            <Plus size={14} />
+          </button>
+        )}
       </div>
 
       {expanded && (
@@ -178,17 +182,19 @@ export default function KnowledgeBasePanel({ datasourceId }: { datasourceId: num
                         <>
                           <div className="flex items-start justify-between">
                             <span className="text-[10px] text-gray-200 font-medium">{entry.title}</span>
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-premium">
-                              <button
-                                onClick={() => { setEditingId(entry.id); setEditTitle(entry.title); setEditContent(entry.content); }}
-                                className="text-gray-600 hover:text-gray-300"
-                              >
-                                <PencilSimple size={10} />
-                              </button>
-                              <button onClick={() => handleDelete(entry.id)} className="text-gray-600 hover:text-red-400">
-                                <Trash size={10} />
-                              </button>
-                            </div>
+                            {admin && (
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-premium">
+                                <button
+                                  onClick={() => { setEditingId(entry.id); setEditTitle(entry.title); setEditContent(entry.content); }}
+                                  className="text-gray-600 hover:text-gray-300"
+                                >
+                                  <PencilSimple size={10} />
+                                </button>
+                                <button onClick={() => handleDelete(entry.id)} className="text-gray-600 hover:text-red-400">
+                                  <Trash size={10} />
+                                </button>
+                              </div>
+                            )}
                           </div>
                           <p className="text-[9px] text-gray-500 mt-0.5 leading-relaxed">{entry.content}</p>
                           <div className="flex items-center gap-2 mt-1">

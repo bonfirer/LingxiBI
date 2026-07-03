@@ -8,7 +8,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
@@ -16,7 +16,44 @@ use crate::alert_engine;
 use crate::email;
 use crate::llm::{prompts, ChatMessage, LlmClient};
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::{ensure_admin, ensure_owner, internal_error};
 use crate::AppState;
+
+/// Load an alert rule and verify the caller owns it (admins bypass).
+async fn load_owned_rule(
+    state: &AppState,
+    id: i32,
+    user: &AuthUser,
+) -> Result<AlertRule, (StatusCode, String)> {
+    let rule = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Alert rule not found".to_string()))?;
+    ensure_owner(user, rule.owner_user_id)?;
+    Ok(rule)
+}
+
+/// Verify the caller owns metric `metric_id` (admins bypass). Used when a rule
+/// references a metric — you can only alert on your own metrics.
+async fn ensure_metric_owned(
+    state: &AppState,
+    metric_id: i32,
+    user: &AuthUser,
+) -> Result<(), (StatusCode, String)> {
+    let m: Option<(Option<i32>,)> =
+        sqlx::query_as("SELECT owner_user_id FROM metric_pools WHERE id = ?")
+            .bind(metric_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(internal_error)?;
+    match m {
+        Some((owner,)) => ensure_owner(user, owner),
+        None => Err((StatusCode::NOT_FOUND, "Metric pool not found".to_string())),
+    }
+}
 
 // ── SMTP config ──
 
@@ -56,8 +93,10 @@ pub async fn get_smtp(
 /// Update the SMTP config. Empty password preserves the existing one.
 pub async fn update_smtp(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<UpdateSmtpConfig>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let existing = sqlx::query_as::<_, SmtpConfig>("SELECT * FROM smtp_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
@@ -120,8 +159,10 @@ pub struct TestSmtpRequest {
 /// Send a quick test email to verify SMTP credentials.
 pub async fn test_smtp(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<TestSmtpRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let cfg = sqlx::query_as::<_, SmtpConfig>("SELECT * FROM smtp_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
@@ -168,8 +209,10 @@ pub async fn get_feishu(
 /// Update the Feishu config. Empty secret preserves the existing one.
 pub async fn update_feishu(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<UpdateFeishuConfig>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let existing = sqlx::query_as::<_, FeishuConfig>("SELECT * FROM feishu_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
@@ -212,7 +255,9 @@ pub async fn update_feishu(
 /// Send a test card to verify the Feishu webhook + signing secret.
 pub async fn test_feishu(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let cfg = sqlx::query_as::<_, FeishuConfig>("SELECT * FROM feishu_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
@@ -236,38 +281,36 @@ const VALID_SCHEDULES: &[&str] = &["hourly", "daily", "weekly", "monthly", "cron
 
 pub async fn list_rules(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<AlertRule>>, (StatusCode, String)> {
-    let rules = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules ORDER BY created_at DESC")
-        .fetch_all(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?;
+    let rules = sqlx::query_as::<_, AlertRule>(
+        "SELECT * FROM alert_rules WHERE (owner_user_id = ? OR ? = 1) ORDER BY created_at DESC",
+    )
+    .bind(user.id)
+    .bind(user.is_admin as i32)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal_error)?;
     Ok(Json(rules))
 }
 
 pub async fn get_rule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<AlertRule>, (StatusCode, String)> {
-    let rule = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Alert rule not found".to_string()))?;
+    let rule = load_owned_rule(&state, id, &user).await?;
     Ok(Json(rule))
 }
 
 pub async fn create_rule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<CreateAlertRule>,
 ) -> Result<(StatusCode, Json<AlertRule>), (StatusCode, String)> {
-    // Validate metric exists.
-    sqlx::query_as::<_, MetricPool>("SELECT * FROM metric_pools WHERE id = ?")
-        .bind(payload.metric_pool_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Metric pool not found".to_string()))?;
+    // Validate metric exists and is owned by the caller (you can only alert on
+    // your own metrics).
+    ensure_metric_owned(&state, payload.metric_pool_id, &user).await?;
 
     if !VALID_OPERATORS.contains(&payload.operator.as_str()) {
         return Err((StatusCode::BAD_REQUEST, format!("Invalid operator. One of: {:?}", VALID_OPERATORS)));
@@ -284,8 +327,8 @@ pub async fn create_rule(
 
     let result = sqlx::query(
         "INSERT INTO alert_rules (name, metric_pool_id, condition_column, operator, threshold, recipients,
-            schedule_type, cron_expr, enabled, subject_template, body_template, include_excel, notify_feishu, cooldown_minutes, next_run_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
+            schedule_type, cron_expr, enabled, subject_template, body_template, include_excel, notify_feishu, cooldown_minutes, next_run_at, owner_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&payload.name)
     .bind(payload.metric_pool_id)
@@ -301,9 +344,10 @@ pub async fn create_rule(
     .bind(payload.notify_feishu.unwrap_or(false))
     .bind(payload.cooldown_minutes.unwrap_or(0))
     .bind(next_run)
+    .bind(user.id)
     .execute(&state.db)
     .await
-    .map_err(crate::routes::internal_error)?;
+    .map_err(internal_error)?;
 
     let rule = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules WHERE id = ?")
         .bind(result.last_insert_id() as i32)
@@ -316,15 +360,11 @@ pub async fn create_rule(
 
 pub async fn update_rule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<UpdateAlertRule>,
 ) -> Result<Json<AlertRule>, (StatusCode, String)> {
-    let existing = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Alert rule not found".to_string()))?;
+    let existing = load_owned_rule(&state, id, &user).await?;
 
     let name = payload.name.unwrap_or(existing.name);
     let condition_column = payload.condition_column.or(existing.condition_column);
@@ -390,30 +430,25 @@ pub async fn update_rule(
 
 pub async fn delete_rule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let result = sqlx::query("DELETE FROM alert_rules WHERE id = ?")
+    load_owned_rule(&state, id, &user).await?;
+    sqlx::query("DELETE FROM alert_rules WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(crate::routes::internal_error)?;
-    if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Alert rule not found".to_string()));
-    }
+        .map_err(internal_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Manually evaluate + (if triggered) send an alert now.
 pub async fn trigger_rule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let rule = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Alert rule not found".to_string()))?;
+    let rule = load_owned_rule(&state, id, &user).await?;
 
     match alert_engine::run_alert(&state, &rule, false).await {
         Ok(outcome) => {
@@ -438,15 +473,11 @@ pub async fn trigger_rule(
 /// Send a test alert email immediately, ignoring the condition + cooldown.
 pub async fn test_rule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<TestAlertEmail>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut rule = sqlx::query_as::<_, AlertRule>("SELECT * FROM alert_rules WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Alert rule not found".to_string()))?;
+    let mut rule = load_owned_rule(&state, id, &user).await?;
 
     // Override recipients for this test, if provided.
     if let Some(recipients) = payload.recipients {
@@ -480,13 +511,15 @@ pub async fn test_rule(
 
 pub async fn generate_template(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<GenerateAlertTemplateRequest>,
 ) -> Result<Json<AlertTemplate>, (StatusCode, String)> {
+    ensure_metric_owned(&state, payload.metric_pool_id, &user).await?;
     let metric = sqlx::query_as::<_, MetricPool>("SELECT * FROM metric_pools WHERE id = ?")
         .bind(payload.metric_pool_id)
         .fetch_optional(&state.db)
         .await
-        .map_err(crate::routes::internal_error)?
+        .map_err(internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "Metric pool not found".to_string()))?;
 
     let llm_cfg = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
@@ -561,11 +594,14 @@ pub struct AlertLogQuery {
 
 pub async fn list_logs(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Query(params): Query<AlertLogQuery>,
 ) -> Result<Json<Vec<AlertLog>>, (StatusCode, String)> {
     let limit = params.limit.unwrap_or(100).min(500);
 
     let logs = if let Some(rule_id) = params.rule_id {
+        // Verify the caller owns the rule before returning its logs.
+        load_owned_rule(&state, rule_id, &user).await?;
         sqlx::query_as::<_, AlertLog>(
             "SELECT * FROM alert_logs WHERE alert_rule_id = ? ORDER BY created_at DESC LIMIT ?",
         )
@@ -574,12 +610,20 @@ pub async fn list_logs(
         .fetch_all(&state.db)
         .await
     } else {
-        sqlx::query_as::<_, AlertLog>("SELECT * FROM alert_logs ORDER BY created_at DESC LIMIT ?")
-            .bind(limit)
-            .fetch_all(&state.db)
-            .await
+        // Only logs for rules the caller owns (admins see all).
+        sqlx::query_as::<_, AlertLog>(
+            "SELECT al.* FROM alert_logs al \
+             JOIN alert_rules ar ON al.alert_rule_id = ar.id \
+             WHERE (ar.owner_user_id = ? OR ? = 1) \
+             ORDER BY al.created_at DESC LIMIT ?",
+        )
+        .bind(user.id)
+        .bind(user.is_admin as i32)
+        .bind(limit)
+        .fetch_all(&state.db)
+        .await
     }
-    .map_err(crate::routes::internal_error)?;
+    .map_err(internal_error)?;
 
     Ok(Json(logs))
 }

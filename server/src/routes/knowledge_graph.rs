@@ -1,17 +1,21 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::ensure_admin;
 use crate::AppState;
 
 pub async fn get_graph(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(ds_id): Path<i32>,
 ) -> Result<Json<KnowledgeGraph>, (StatusCode, String)> {
+    crate::routes::datasources::ensure_access(&state, ds_id, &user).await?;
     let row: Option<(serde_json::Value,)> =
         sqlx::query_as("SELECT graph_data FROM knowledge_graphs WHERE datasource_id = ?")
             .bind(ds_id)
@@ -31,8 +35,10 @@ pub async fn get_graph(
 
 pub async fn refresh_graph(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(ds_id): Path<i32>,
 ) -> Result<Json<KnowledgeGraph>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     // Get schema first
     let row: Option<(serde_json::Value,)> =
         sqlx::query_as("SELECT schema_data FROM `schemas` WHERE datasource_id = ?")

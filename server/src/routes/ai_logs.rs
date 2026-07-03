@@ -1,9 +1,11 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
+use crate::routes::auth::AuthUser;
+use crate::routes::ensure_admin;
 use crate::AppState;
 
 #[derive(sqlx::FromRow, serde::Serialize)]
@@ -40,8 +42,10 @@ pub struct PaginatedLogs {
 /// GET /api/ai-logs?page=1&page_size=20 — list AI request logs with pagination.
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedLogs>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(20).min(100).max(1);
     let offset = (page - 1) * page_size;
@@ -76,8 +80,10 @@ pub async fn list(
 /// GET /api/ai-logs/:id — get full detail of a single log entry.
 pub async fn get_one(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<AiLogEntry>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let log = sqlx::query_as::<_, AiLogEntry>(
         "SELECT * FROM ai_logs WHERE id = ?"
     )

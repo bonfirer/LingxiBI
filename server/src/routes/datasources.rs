@@ -1,17 +1,57 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::{ensure_admin, internal_error};
 use crate::AppState;
+
+/// Whether `user` may access datasource `ds_id`. Admins access all; members
+/// need an explicit grant.
+pub async fn has_access(
+    state: &AppState,
+    ds_id: i32,
+    user: &AuthUser,
+) -> Result<bool, (StatusCode, String)> {
+    if user.is_admin {
+        return Ok(true);
+    }
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT id FROM datasource_grants WHERE datasource_id = ? AND user_id = ?",
+    )
+    .bind(ds_id)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal_error)?;
+    Ok(row.is_some())
+}
+
+/// Enforce datasource access, returning 404 (not 403) so we don't reveal that a
+/// datasource the caller can't use exists. Call this from any path that reads
+/// data from, or runs SQL against, a datasource on behalf of a member.
+pub async fn ensure_access(
+    state: &AppState,
+    ds_id: i32,
+    user: &AuthUser,
+) -> Result<(), (StatusCode, String)> {
+    if has_access(state, ds_id, user).await? {
+        Ok(())
+    } else {
+        Err((StatusCode::NOT_FOUND, "Data source not found".to_string()))
+    }
+}
 
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<CreateDataSource>,
 ) -> Result<(StatusCode, Json<DataSource>), (StatusCode, String)> {
+    ensure_admin(&user)?;
     let result = sqlx::query(
         "INSERT INTO datasources (name, db_type, host, port, database_name, username, password)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -38,24 +78,39 @@ pub async fn create(
 
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<DataSource>>, (StatusCode, String)> {
-    let sources = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources ORDER BY created_at DESC")
+    // Admins see all datasources; members see only the ones granted to them.
+    let sources = if user.is_admin {
+        sqlx::query_as::<_, DataSource>("SELECT * FROM datasources ORDER BY created_at DESC")
+            .fetch_all(&state.db)
+            .await
+    } else {
+        sqlx::query_as::<_, DataSource>(
+            "SELECT d.* FROM datasources d \
+             JOIN datasource_grants g ON g.datasource_id = d.id \
+             WHERE g.user_id = ? ORDER BY d.created_at DESC",
+        )
+        .bind(user.id)
         .fetch_all(&state.db)
         .await
-        .map_err(crate::routes::internal_error)?;
+    }
+    .map_err(internal_error)?;
 
     Ok(Json(sources))
 }
 
 pub async fn get_one(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<DataSource>, (StatusCode, String)> {
+    ensure_access(&state, id, &user).await?;
     let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
         .await
-        .map_err(crate::routes::internal_error)?
+        .map_err(internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "Data source not found".to_string()))?;
 
     Ok(Json(ds))
@@ -63,9 +118,11 @@ pub async fn get_one(
 
 pub async fn update(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<UpdateDataSource>,
 ) -> Result<Json<DataSource>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let existing = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -101,8 +158,10 @@ pub async fn update(
 
 pub async fn remove(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let result = sqlx::query("DELETE FROM datasources WHERE id = ?")
         .bind(id)
         .execute(&state.db)
@@ -121,8 +180,10 @@ pub async fn remove(
 
 pub async fn test_connection(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -159,8 +220,10 @@ pub async fn test_connection(
 
 pub async fn introspect(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<SchemaInfo>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -206,8 +269,10 @@ pub async fn introspect(
 
 pub async fn get_schema(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<SchemaInfo>, (StatusCode, String)> {
+    ensure_access(&state, id, &user).await?;
     let row: Option<(serde_json::Value,)> =
         sqlx::query_as("SELECT schema_data FROM `schemas` WHERE datasource_id = ?")
             .bind(id)
@@ -228,8 +293,10 @@ pub async fn get_schema(
 /// Profile all columns — sample values, distinct counts, min/max.
 pub async fn profile(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -245,6 +312,77 @@ pub async fn profile(
         "status": "ok",
         "columns_profiled": count
     })))
+}
+
+// ── Datasource access grants (admin only) ──
+
+#[derive(serde::Deserialize)]
+pub struct SetGrants {
+    pub user_ids: Vec<i32>,
+}
+
+/// GET /api/datasources/{id}/grants — list the user ids granted access (admin).
+pub async fn list_grants(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+) -> Result<Json<Vec<i32>>, (StatusCode, String)> {
+    ensure_admin(&user)?;
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        "SELECT user_id FROM datasource_grants WHERE datasource_id = ? ORDER BY user_id",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal_error)?;
+    Ok(Json(rows.into_iter().map(|(uid,)| uid).collect()))
+}
+
+/// PUT /api/datasources/{id}/grants — replace the grant list (admin).
+pub async fn set_grants(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+    Json(payload): Json<SetGrants>,
+) -> Result<Json<Vec<i32>>, (StatusCode, String)> {
+    ensure_admin(&user)?;
+
+    // Confirm the datasource exists.
+    sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Data source not found".to_string()))?;
+
+    // Replace the grant set: clear then re-insert (skip invalid/admin ids gracefully).
+    let mut tx = state.db.begin().await.map_err(internal_error)?;
+    sqlx::query("DELETE FROM datasource_grants WHERE datasource_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
+    for uid in payload.user_ids.iter().copied().collect::<std::collections::BTreeSet<_>>() {
+        sqlx::query(
+            "INSERT INTO datasource_grants (datasource_id, user_id) \
+             SELECT ?, id FROM users WHERE id = ?",
+        )
+        .bind(id)
+        .bind(uid)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal_error)?;
+    }
+    tx.commit().await.map_err(internal_error)?;
+
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        "SELECT user_id FROM datasource_grants WHERE datasource_id = ? ORDER BY user_id",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal_error)?;
+    Ok(Json(rows.into_iter().map(|(uid,)| uid).collect()))
 }
 
 // ── Per-DB connection test helpers ──

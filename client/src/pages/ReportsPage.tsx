@@ -489,6 +489,10 @@ function LazyReportPreview({ report }: { report: Report }) {
           style={{ transform: 'scale(0.35)', transformOrigin: 'top left', width: '286%', height: '286%' }}
           tabIndex={-1}
           loading="lazy"
+          // Static thumbnail of AI-generated HTML: allow scripts (charts need
+          // them) but block top-navigation, form submission, popups, downloads,
+          // etc. Matches the report detail viewer's sandbox.
+          sandbox="allow-scripts allow-same-origin"
           onLoad={() => releaseRef.current?.()}
           onError={() => releaseRef.current?.()}
         />

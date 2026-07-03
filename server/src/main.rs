@@ -88,6 +88,8 @@ async fn main() {
     run_migrations(&pool, include_str!("../migrations/022_feishu_alerts.sql")).await;
     run_migrations(&pool, include_str!("../migrations/023_report_themes.sql")).await;
     run_migrations(&pool, include_str!("../migrations/024_report_summaries.sql")).await;
+    run_migrations(&pool, include_str!("../migrations/025_resource_ownership.sql")).await;
+    run_migrations(&pool, include_str!("../migrations/026_datasource_grants.sql")).await;
 
     let state = Arc::new(AppState {
         db: pool,
@@ -123,6 +125,8 @@ async fn main() {
         .route("/api/datasources/{id}/introspect", post(routes::datasources::introspect))
         .route("/api/datasources/{id}/schema", get(routes::datasources::get_schema))
         .route("/api/datasources/{id}/profile", post(routes::datasources::profile))
+        .route("/api/datasources/{id}/grants", get(routes::datasources::list_grants))
+        .route("/api/datasources/{id}/grants", put(routes::datasources::set_grants))
         .route("/api/datasources/{id}/table-descriptions", get(routes::table_descriptions::list))
         .route("/api/datasources/{id}/table-descriptions", post(routes::table_descriptions::upsert))
         .route("/api/datasources/{id}/column-descriptions", get(routes::table_descriptions::list_columns))
@@ -227,6 +231,11 @@ async fn main() {
         .route("/api/achievements", get(routes::achievements::list))
         // Short-lived, read-only token for embedding reports in iframes.
         .route("/api/embed-token", get(routes::auth::embed_token))
+        // Admin-only user management (each handler re-checks admin role).
+        .route("/api/users", get(routes::auth::list_users))
+        .route("/api/users", post(routes::auth::create_user))
+        .route("/api/users/{id}", put(routes::auth::update_user))
+        .route("/api/users/{id}", delete(routes::auth::delete_user))
         // All routes above require a valid JWT.
         .route_layer(axum::middleware::from_fn(routes::auth::require_auth));
 

@@ -88,6 +88,7 @@ Connect MySQL, PostgreSQL, or Oracle, then:
 | 📸 | **Snapshots** | Scheduled metric snapshots for trend / YoY / MoM analysis |
 | 🔔 | **Multi-channel alerts** | Threshold rules → AI-generated email (with Excel) and/or Feishu card (HMAC-SHA256 signed) |
 | 🔗 | **Sharing** | Unguessable share links with publish/draft control |
+| 👥 | **Multi-user & access control** | Admin/member roles; per-user reports, metrics, conversations & alerts; datasource-level access grants |
 | 🌍 | **i18n** | English + Chinese out of the box |
 | 🔐 | **Security** | JWT auth, login rate-limiting, SQL allowlist validator, SSRF protection, security headers |
 
@@ -277,12 +278,40 @@ lingxibi/
 | Layer | Mechanism |
 |-------|-----------|
 | **Auth** | JWT sessions, bcrypt-12, login rate-limiting (5 attempts / 5 min lockout) |
+| **Authorization** | Admin/member roles; per-user ownership of reports, metrics, conversations & alerts; datasource-level access grants (server-enforced on every read/query) |
 | **SQL safety** | Lexical allowlist validator (SELECT/SHOW/DESCRIBE/EXPLAIN/CTE only), per-query timeout (30s), row cap (50k) |
 | **SSRF protection** | Feishu webhook URL restricted to official domains only |
 | **Response headers** | `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` |
-| **Secret handling** | Credentials never returned by API; passwords masked in responses |
+| **Secret handling** | Credentials never returned by API; passwords/keys masked in responses |
 
 > 📣 Report vulnerabilities privately to **[macrogroot@outlook.com](mailto:macrogroot@outlook.com)** — not via public issues.
+
+---
+
+## 👥 Users & access control
+
+LingxiBI supports multiple users with two roles and a clear split between **shared infrastructure** and **personal work products**.
+
+**Roles**
+- **Admin** — manages shared infrastructure and can see/manage everything: data sources, the AI provider (LLM) config, SMTP/Feishu settings, the knowledge base, and user accounts.
+- **Member** — works only with their own content and the data sources they've been granted.
+
+**What's private vs. shared**
+
+| Resource | Visibility |
+|----------|------------|
+| Reports · metrics · conversations · alert rules · snapshot schedules · themes | **Per-user** — a member sees only their own; admins see all |
+| Data sources · schema · knowledge base · AI examples · LLM/SMTP/Feishu config | **Shared** — readable by users with access; only admins can create/edit |
+
+**Datasource-level access**
+Data sources are admin-managed. A member cannot see or query a data source until an admin grants them access. Grants are enforced on the server for every data-touching path — listing, schema/graph reads, ad-hoc SQL, metric & report-dataset creation/refresh, snapshots, and AI chat. Revoking a grant immediately blocks further queries (already-cached data stays until overwritten). Admins implicitly have access to every data source.
+
+**First run & adding users**
+- The first account you register becomes the **admin**. Registration then closes.
+- Add more users at **Settings → Users** (admin only): create members/admins, reset passwords, toggle roles.
+- Grant a member access to a data source at **Data Sources → (select one) → Access**.
+
+> Existing single-admin deployments: after upgrading, all current data is assigned to the first admin, and data sources start with no member grants — grant access as you add members.
 
 ---
 

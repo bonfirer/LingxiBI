@@ -76,10 +76,19 @@ pub fn jwt_secret() -> String {
     std::env::var("JWT_SECRET").unwrap_or_default()
 }
 
-/// Decode a JWT and return `(user_id, scope)` if the signature and expiry are
-/// valid. `scope` is `None` for full session tokens, `Some("embed")` for the
-/// short-lived read-only tokens used by report iframes.
-fn decode_claims(token: &str) -> Result<(i32, Option<String>), ()> {
+/// The authenticated caller, injected into request extensions by the auth
+/// middleware and pulled into handlers via `Extension<AuthUser>`.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthUser {
+    pub id: i32,
+    pub is_admin: bool,
+}
+
+/// Decode a JWT and return `(user_id, scope, role)` if the signature and expiry
+/// are valid. `scope` is `None` for full session tokens, `Some("embed")` for the
+/// short-lived read-only tokens used by report iframes. `role` comes from the
+/// session token ("admin"/"member"); embed tokens carry no role.
+fn decode_claims(token: &str) -> Result<(i32, Option<String>, Option<String>), ()> {
     let secret = jwt_secret();
     if secret.is_empty() {
         return Err(());
@@ -100,26 +109,39 @@ fn decode_claims(token: &str) -> Result<(i32, Option<String>), ()> {
         .get("scope")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    Ok((user_id, scope))
+    let role = data
+        .claims
+        .get("role")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok((user_id, scope, role))
 }
 
-/// Validate a full-session bearer token and return the user id.
+/// Validate a full-session bearer token and return `(user_id, is_admin)`.
 ///
 /// Narrowly-scoped embed tokens are REJECTED here, so a leaked embed token
 /// (which may travel through URLs, browser history, and access logs) can never
 /// be used against admin/mutation routes — only the report iframe endpoints.
-pub fn validate_token(token: &str) -> Result<i32, ()> {
-    let (user_id, scope) = decode_claims(token)?;
+pub fn validate_session(token: &str) -> Result<(i32, bool), ()> {
+    let (user_id, scope, role) = decode_claims(token)?;
     match scope.as_deref() {
         Some("embed") => Err(()),
-        _ => Ok(user_id),
+        _ => Ok((user_id, role.as_deref() == Some("admin"))),
     }
+}
+
+/// Validate a full-session bearer token and return just the user id.
+pub fn validate_token(token: &str) -> Result<i32, ()> {
+    validate_session(token).map(|(id, _)| id)
 }
 
 /// Validate a token for the report iframe endpoints (`/html`, `/data`).
 /// Accepts either a full session token or a short-lived embed token.
-pub fn validate_embed_or_session(token: &str) -> Result<i32, ()> {
-    decode_claims(token).map(|(user_id, _)| user_id)
+/// Embed tokens are never treated as admin.
+pub fn validate_embed_or_session(token: &str) -> Result<(i32, bool), ()> {
+    let (user_id, scope, role) = decode_claims(token)?;
+    let is_admin = scope.as_deref() != Some("embed") && role.as_deref() == Some("admin");
+    Ok((user_id, is_admin))
 }
 
 /// Mint a short-lived, read-only token for embedding report data into iframes.
@@ -167,58 +189,57 @@ pub async fn embed_token(
 }
 
 /// Axum middleware: require a valid `Authorization: Bearer <jwt>` header.
-/// Applied to all protected routes. Public routes (auth, health, share) bypass this.
+/// On success, injects `AuthUser` into request extensions so handlers can scope
+/// data by owner. Applied to all protected routes; public routes bypass this.
 pub async fn require_auth(
-    req: axum::http::Request<axum::body::Body>,
+    mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
-    let token = req
+    let auth = req
         .headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|t| validate_session(t).ok());
 
-    match token {
-        Some(t) if validate_token(t).is_ok() => Ok(next.run(req).await),
-        _ => Err(StatusCode::UNAUTHORIZED),
+    match auth {
+        Some((id, is_admin)) => {
+            req.extensions_mut().insert(AuthUser { id, is_admin });
+            Ok(next.run(req).await)
+        }
+        None => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
 /// Like `require_auth`, but also accepts the token from a `?token=` query param.
 /// Used for endpoints loaded directly by the browser (iframes, embedded fetches)
-/// where an Authorization header cannot be set.
+/// where an Authorization header cannot be set. Also injects `AuthUser`.
 pub async fn require_auth_flexible(
-    req: axum::http::Request<axum::body::Body>,
+    mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
     // 1. Try the Authorization header
-    let header_ok = req
+    let header_auth = req
         .headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| validate_embed_or_session(t).is_ok())
-        .unwrap_or(false);
-
-    if header_ok {
-        return Ok(next.run(req).await);
-    }
+        .and_then(|t| validate_embed_or_session(t).ok());
 
     // 2. Fall back to a ?token= query parameter
-    let query_ok = req
-        .uri()
-        .query()
-        .map(|q| {
-            url_decode_token(q)
-                .map(|t| validate_embed_or_session(&t).is_ok())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
+    let auth = header_auth.or_else(|| {
+        req.uri()
+            .query()
+            .and_then(url_decode_token)
+            .and_then(|t| validate_embed_or_session(&t).ok())
+    });
 
-    if query_ok {
-        Ok(next.run(req).await)
-    } else {
-        Err(StatusCode::UNAUTHORIZED)
+    match auth {
+        Some((id, is_admin)) => {
+            req.extensions_mut().insert(AuthUser { id, is_admin });
+            Ok(next.run(req).await)
+        }
+        None => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
@@ -403,4 +424,225 @@ pub async fn check_setup(
         .map_err(internal)?;
 
     Ok(Json(serde_json::json!({ "has_users": count.0 > 0 })))
+}
+
+// ── Admin-only user management ──
+//
+// These endpoints let an admin add/manage additional users. They live behind
+// `require_auth`, and each re-checks `AuthUser::is_admin` so members cannot
+// reach them even if the route is discovered.
+
+fn require_admin(user: &AuthUser) -> Result<(), (StatusCode, String)> {
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, "Admin privileges required".to_string()))
+    }
+}
+
+fn normalize_role(role: Option<&str>) -> &'static str {
+    match role {
+        Some("admin") => "admin",
+        _ => "member",
+    }
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct UserSummary {
+    pub id: i32,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// GET /api/users — list all users (admin only).
+pub async fn list_users(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<AuthUser>,
+) -> Result<Json<Vec<UserSummary>>, (StatusCode, String)> {
+    require_admin(&user)?;
+    let users = sqlx::query_as::<_, UserSummary>(
+        "SELECT id, username, display_name, role, created_at FROM users ORDER BY id ASC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(users))
+}
+
+#[derive(serde::Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+}
+
+/// POST /api/users — create a new user (admin only).
+pub async fn create_user(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<AuthUser>,
+    Json(body): Json<CreateUserRequest>,
+) -> Result<(StatusCode, Json<UserSummary>), (StatusCode, String)> {
+    require_admin(&user)?;
+
+    if body.username.trim().len() < 3 || body.username.len() > 64 {
+        return Err((StatusCode::BAD_REQUEST, "Username must be 3–64 characters.".to_string()));
+    }
+    if body.password.len() < 8 {
+        return Err((StatusCode::BAD_REQUEST, "Password must be at least 8 characters.".to_string()));
+    }
+
+    let role = normalize_role(body.role.as_deref());
+    let hash = bcrypt::hash(&body.password, 12).map_err(internal)?;
+    let display = body.display_name.as_deref().unwrap_or(body.username.trim());
+
+    let result = sqlx::query(
+        "INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)",
+    )
+    .bind(body.username.trim())
+    .bind(&hash)
+    .bind(display)
+    .bind(role)
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        // Duplicate username (1062 / 23000) → 409 instead of a generic 500.
+        let dup = e
+            .as_database_error()
+            .map(|d| d.code().as_deref() == Some("23000"))
+            .unwrap_or(false);
+        if dup {
+            (StatusCode::CONFLICT, "Username already exists".to_string())
+        } else {
+            internal(e)
+        }
+    })?;
+
+    let created = sqlx::query_as::<_, UserSummary>(
+        "SELECT id, username, display_name, role, created_at FROM users WHERE id = ?",
+    )
+    .bind(result.last_insert_id() as i32)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateUserRequest {
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    /// If present and non-empty, resets the user's password.
+    pub password: Option<String>,
+}
+
+/// PUT /api/users/{id} — update a user's display name, role, or password (admin only).
+pub async fn update_user(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<i32>,
+    Json(body): Json<UpdateUserRequest>,
+) -> Result<Json<UserSummary>, (StatusCode, String)> {
+    require_admin(&user)?;
+
+    let existing = sqlx::query_as::<_, UserRow>(
+        "SELECT id, username, password_hash, display_name, role FROM users WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+
+    // Guard: don't allow demoting the last remaining admin (would lock everyone
+    // out of user management).
+    let new_role = match body.role.as_deref() {
+        Some(r) => normalize_role(Some(r)),
+        None => normalize_role(existing.role.as_deref()),
+    };
+    if existing.role.as_deref() == Some("admin") && new_role != "admin" {
+        let admin_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            .fetch_one(&state.db)
+            .await
+            .map_err(internal)?;
+        if admin_count.0 <= 1 {
+            return Err((StatusCode::BAD_REQUEST, "Cannot demote the last admin.".to_string()));
+        }
+    }
+
+    let display = body.display_name.as_deref().unwrap_or(existing.display_name.as_deref().unwrap_or(&existing.username));
+
+    // Reset password only when a non-empty value is supplied.
+    let password_hash = match body.password.as_deref() {
+        Some(p) if !p.is_empty() => {
+            if p.len() < 8 {
+                return Err((StatusCode::BAD_REQUEST, "Password must be at least 8 characters.".to_string()));
+            }
+            bcrypt::hash(p, 12).map_err(internal)?
+        }
+        _ => existing.password_hash.clone(),
+    };
+
+    sqlx::query("UPDATE users SET display_name = ?, role = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(display)
+        .bind(new_role)
+        .bind(&password_hash)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+
+    let updated = sqlx::query_as::<_, UserSummary>(
+        "SELECT id, username, display_name, role, created_at FROM users WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+
+    Ok(Json(updated))
+}
+
+/// DELETE /api/users/{id} — delete a user (admin only).
+/// Refuses to delete yourself or the last admin.
+pub async fn delete_user(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<i32>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    require_admin(&user)?;
+
+    if id == user.id {
+        return Err((StatusCode::BAD_REQUEST, "You cannot delete your own account.".to_string()));
+    }
+
+    let target = sqlx::query_as::<_, UserRow>(
+        "SELECT id, username, password_hash, display_name, role FROM users WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?
+    .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+
+    if target.role.as_deref() == Some("admin") {
+        let admin_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            .fetch_one(&state.db)
+            .await
+            .map_err(internal)?;
+        if admin_count.0 <= 1 {
+            return Err((StatusCode::BAD_REQUEST, "Cannot delete the last admin.".to_string()));
+        }
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

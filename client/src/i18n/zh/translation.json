@@ -52,7 +52,16 @@
       "title": "尚未配置数据源",
       "description": "连接您的第一个数据库，开始探索数据模式并生成报表。",
       "selectOrAdd": "选择或添加数据源",
-      "selectOrAddDesc": "从左侧面板选择一个数据源，或添加新的数据源开始使用。"
+      "selectOrAddDesc": "从左侧面板选择一个数据源，或添加新的数据源开始使用。",
+      "noAccessTitle": "暂无可用数据源",
+      "noAccessDesc": "你还没有任何数据源的访问权限，请联系管理员为你授权。"
+    },
+    "access": {
+      "button": "访问权限",
+      "title": "访问权限 · {{name}}",
+      "desc": "选择哪些成员可以使用此数据源（查看结构、执行查询、构建报表）。",
+      "adminsNote": "管理员始终拥有访问权限：{{names}}",
+      "noMembers": "还没有成员账户，可在设置中创建。"
     },
     "deleteConfirm": {
       "title": "确认删除数据源",
@@ -417,7 +426,23 @@
     "logInput": "入参（Prompt）",
     "logOutput": "出参（AI 返回）",
     "logError": "错误详情",
-    "logNoDetail": "无详细入参/出参记录"
+    "logNoDetail": "无详细入参/出参记录",
+    "memberNotice": "工作区设置（AI 服务商、数据连接、预警）由管理员统一管理。",
+    "users": {
+      "title": "用户管理",
+      "add": "新增用户",
+      "username": "用户名",
+      "displayName": "显示名称",
+      "password": "密码（至少 8 位）",
+      "roleMember": "成员",
+      "roleAdmin": "管理员",
+      "you": "你",
+      "toggleRole": "切换管理员/成员",
+      "created": "已创建用户",
+      "deleted": "已删除用户",
+      "validation": "用户名必填，密码至少 8 位。",
+      "deleteConfirm": "确定删除用户「{{name}}」？其报表与数据不会被删除。"
+    }
   },
   "aiPanel": {
     "newChat": "新对话",

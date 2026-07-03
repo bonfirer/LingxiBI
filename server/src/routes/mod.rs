@@ -20,6 +20,7 @@ pub mod alerts;
 pub mod table_descriptions;
 
 use axum::http::StatusCode;
+use crate::routes::auth::AuthUser;
 
 /// Map any internal error to a generic HTTP 500, logging the real cause
 /// server-side. Use this for unexpected failures (DB/driver/serialization) so
@@ -30,4 +31,27 @@ pub fn internal_error<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
         StatusCode::INTERNAL_SERVER_ERROR,
         "Internal server error".to_string(),
     )
+}
+
+/// Ownership gate for per-user resources. Admins pass unconditionally; everyone
+/// else must be the resource owner. Returns 404 (not 403) for non-owned rows so
+/// we don't reveal that a resource with that id exists.
+pub fn ensure_owner(
+    user: &AuthUser,
+    owner_user_id: Option<i32>,
+) -> Result<(), (StatusCode, String)> {
+    if user.is_admin || (owner_user_id.is_some() && owner_user_id == Some(user.id)) {
+        Ok(())
+    } else {
+        Err((StatusCode::NOT_FOUND, "Not found".to_string()))
+    }
+}
+
+/// Require admin privileges for a shared-infrastructure mutation.
+pub fn ensure_admin(user: &AuthUser) -> Result<(), (StatusCode, String)> {
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, "Admin privileges required".to_string()))
+    }
 }

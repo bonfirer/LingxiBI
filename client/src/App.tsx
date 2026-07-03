@@ -35,9 +35,19 @@ export default function App() {
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) { setAuthed(false); return; }
-    // Validate token
+    // Validate token and cache the current user (incl. role) for UI gating.
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => { setAuthed(r.ok); if (!r.ok) localStorage.removeItem('token'); })
+      .then(async (r) => {
+        setAuthed(r.ok);
+        if (r.ok) {
+          try {
+            const me = await r.json();
+            localStorage.setItem('user', JSON.stringify(me));
+          } catch { /* ignore */ }
+        } else {
+          localStorage.removeItem('token');
+        }
+      })
       .catch(() => setAuthed(false));
   }, []);
 

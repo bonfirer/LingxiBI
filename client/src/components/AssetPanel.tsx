@@ -26,6 +26,7 @@ import {
   type MetricGroup,
 } from '../lib/api';
 import { useDataSourceStore } from '../stores/datasourceStore';
+import { isAdmin } from '../lib/currentUser';
 
 const statusColors: Record<string, string> = {
   connected: 'bg-data-green',
@@ -118,13 +119,15 @@ function DataSourcesKGPanel({ t, navigate }: { t: (k: string) => string; navigat
         <span className="text-amber-500 text-[10px] font-bold tracking-wide uppercase">
           {t('assetPanel.dataSources')}
         </span>
-        <button
-          onClick={() => { navigate('/datasources'); setShowForm(true); }}
-          className="text-amber-500 hover:text-amber-400 transition-premium"
-          title={t('datasources.newSource')}
-        >
-          <Plus size={14} weight="bold" />
-        </button>
+        {isAdmin() && (
+          <button
+            onClick={() => { navigate('/datasources'); setShowForm(true); }}
+            className="text-amber-500 hover:text-amber-400 transition-premium"
+            title={t('datasources.newSource')}
+          >
+            <Plus size={14} weight="bold" />
+          </button>
+        )}
       </div>
 
       {sources.length === 0 && (

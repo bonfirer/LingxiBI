@@ -1,11 +1,13 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::ensure_admin;
 use crate::AppState;
 
 /// List all knowledge entries, optionally filtered by datasource_id.
@@ -41,8 +43,10 @@ pub async fn list_by_datasource(
 /// Create a new knowledge entry.
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<CreateKnowledgeEntry>,
 ) -> Result<(StatusCode, Json<KnowledgeEntry>), (StatusCode, String)> {
+    ensure_admin(&user)?;
     let category = payload.category.as_deref().unwrap_or("relation");
     let source = payload.source.as_deref().unwrap_or("manual");
     let confidence = payload.confidence.as_deref().unwrap_or("high");
@@ -72,9 +76,11 @@ pub async fn create(
 /// Update a knowledge entry.
 pub async fn update(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<UpdateKnowledgeEntry>,
 ) -> Result<Json<KnowledgeEntry>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     if let Some(title) = &payload.title {
         sqlx::query("UPDATE knowledge_base SET title = ? WHERE id = ?")
             .bind(title).bind(id).execute(&state.db).await.ok();
@@ -104,8 +110,10 @@ pub async fn update(
 /// Delete a knowledge entry.
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    ensure_admin(&user)?;
     sqlx::query("DELETE FROM knowledge_base WHERE id = ?")
         .bind(id)
         .execute(&state.db)

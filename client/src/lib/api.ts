@@ -136,6 +136,11 @@ export const datasourcesApi = {
     request<SchemaInfo>(`/datasources/${id}/introspect`, { method: 'POST' }),
   getSchema: (id: number) =>
     request<SchemaInfo>(`/datasources/${id}/schema`),
+  // Datasource-level access grants (admin only)
+  listGrants: (id: number) =>
+    request<number[]>(`/datasources/${id}/grants`),
+  setGrants: (id: number, userIds: number[]) =>
+    request<number[]>(`/datasources/${id}/grants`, { method: 'PUT', body: JSON.stringify({ user_ids: userIds }) }),
 };
 
 // ── Knowledge Graph ──
@@ -456,4 +461,50 @@ export const alertsApi = {
     const qs = sp.toString();
     return request<AlertLog[]>(`/alerts/logs${qs ? `?${qs}` : ''}`);
   },
+};
+
+// ── Auth / current user ──
+
+export interface CurrentUser {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  role?: string | null;
+}
+
+export const authApi = {
+  me: () => request<CurrentUser>('/auth/me'),
+};
+
+// ── Users (admin only) ──
+
+export interface User {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  role?: string | null;
+  created_at?: string;
+}
+
+export interface CreateUserPayload {
+  username: string;
+  password: string;
+  display_name?: string;
+  role?: string;
+}
+
+export interface UpdateUserPayload {
+  display_name?: string;
+  role?: string;
+  password?: string;
+}
+
+export const usersApi = {
+  list: () => request<User[]>('/users'),
+  create: (payload: CreateUserPayload) =>
+    request<User>('/users', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id: number, payload: UpdateUserPayload) =>
+    request<User>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  delete: (id: number) =>
+    request<void>(`/users/${id}`, { method: 'DELETE' }),
 };

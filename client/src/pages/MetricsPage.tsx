@@ -103,41 +103,45 @@ export default function MetricsPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Load detail data when selected metric changes
+  // Load detail data when the selected metric changes.
+  //
+  // The metrics *list* no longer includes the heavy `result_cache`, so we fetch
+  // the single metric here to get its cached rows (falling back to its source
+  // data pool). Keyed on `selectedId` (a primitive) so this doesn't re-run on
+  // every background list refresh.
   useEffect(() => {
     setPage(1); // Reset pagination
-    if (selectedMetric) {
-      // If result_cache exists, use it directly
-      if (selectedMetric.result_cache) {
-        const rows = Array.isArray(selectedMetric.result_cache)
-          ? selectedMetric.result_cache as Record<string, unknown>[]
-          : [];
-        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-        setDetailData({ columns, rows });
-      } else {
-        // Try to fetch from source pool
-        if (selectedMetric.source_pool_id) {
-          setDetailLoading(true);
-          queryApi.getPool(selectedMetric.source_pool_id)
-            .then((pool) => {
-              if (pool.result_cache) {
-                const rows = Array.isArray(pool.result_cache) ? pool.result_cache as Record<string, unknown>[] : [];
-                const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-                setDetailData({ columns, rows });
-              } else {
-                setDetailData(null);
-              }
-            })
-            .catch(() => setDetailData(null))
-            .finally(() => setDetailLoading(false));
+    if (!selectedId) {
+      setDetailData(null);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    metricsApi.get(selectedId)
+      .then(async (full) => {
+        if (cancelled) return;
+        if (full.result_cache) {
+          const rows = Array.isArray(full.result_cache) ? full.result_cache as Record<string, unknown>[] : [];
+          const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+          setDetailData({ columns, rows });
+        } else if (full.source_pool_id) {
+          const pool = await queryApi.getPool(full.source_pool_id);
+          if (cancelled) return;
+          if (pool.result_cache) {
+            const rows = Array.isArray(pool.result_cache) ? pool.result_cache as Record<string, unknown>[] : [];
+            const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+            setDetailData({ columns, rows });
+          } else {
+            setDetailData(null);
+          }
         } else {
           setDetailData(null);
         }
-      }
-    } else {
-      setDetailData(null);
-    }
-  }, [selectedMetric]);
+      })
+      .catch(() => { if (!cancelled) setDetailData(null); })
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedId]);
 
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) return;

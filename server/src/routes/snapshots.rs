@@ -1,26 +1,67 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
 use crate::routes::query;
+use crate::routes::{ensure_owner, internal_error};
 use crate::AppState;
+
+/// Verify the caller owns metric `metric_id` (admins bypass). 404 otherwise.
+async fn ensure_metric_owned(
+    state: &AppState,
+    metric_id: i32,
+    user: &AuthUser,
+) -> Result<(), (StatusCode, String)> {
+    let m: Option<(Option<i32>,)> =
+        sqlx::query_as("SELECT owner_user_id FROM metric_pools WHERE id = ?")
+            .bind(metric_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(internal_error)?;
+    match m {
+        Some((owner,)) => ensure_owner(user, owner),
+        None => Err((StatusCode::NOT_FOUND, "Metric pool not found".to_string())),
+    }
+}
+
+/// Load a schedule and verify the caller owns it (admins bypass).
+async fn load_owned_schedule(
+    state: &AppState,
+    id: i32,
+    user: &AuthUser,
+) -> Result<MetricSnapshotSchedule, (StatusCode, String)> {
+    let schedule = sqlx::query_as::<_, MetricSnapshotSchedule>(
+        "SELECT * FROM metric_snapshot_schedules WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal_error)?
+    .ok_or((StatusCode::NOT_FOUND, "Schedule not found".to_string()))?;
+    ensure_owner(user, schedule.owner_user_id)?;
+    Ok(schedule)
+}
 
 // ── Schedule CRUD ──
 
-/// List all snapshot schedules.
+/// List the caller's snapshot schedules.
 pub async fn list_schedules(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<MetricSnapshotSchedule>>, (StatusCode, String)> {
     let schedules = sqlx::query_as::<_, MetricSnapshotSchedule>(
-        "SELECT * FROM metric_snapshot_schedules ORDER BY created_at DESC",
+        "SELECT * FROM metric_snapshot_schedules WHERE (owner_user_id = ? OR ? = 1) ORDER BY created_at DESC",
     )
+    .bind(user.id)
+    .bind(user.is_admin as i32)
     .fetch_all(&state.db)
     .await
-    .map_err(crate::routes::internal_error)?;
+    .map_err(internal_error)?;
 
     Ok(Json(schedules))
 }
@@ -28,15 +69,17 @@ pub async fn list_schedules(
 /// Get schedule for a specific metric.
 pub async fn get_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(metric_id): Path<i32>,
 ) -> Result<Json<MetricSnapshotSchedule>, (StatusCode, String)> {
+    ensure_metric_owned(&state, metric_id, &user).await?;
     let schedule = sqlx::query_as::<_, MetricSnapshotSchedule>(
         "SELECT * FROM metric_snapshot_schedules WHERE metric_pool_id = ?",
     )
     .bind(metric_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(crate::routes::internal_error)?
+    .map_err(internal_error)?
     .ok_or((StatusCode::NOT_FOUND, "Schedule not found".to_string()))?;
 
     Ok(Json(schedule))
@@ -45,15 +88,11 @@ pub async fn get_schedule(
 /// Create a snapshot schedule for a metric.
 pub async fn create_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<CreateSnapshotSchedule>,
 ) -> Result<(StatusCode, Json<MetricSnapshotSchedule>), (StatusCode, String)> {
-    // Validate metric exists
-    sqlx::query_as::<_, MetricPool>("SELECT * FROM metric_pools WHERE id = ?")
-        .bind(payload.metric_pool_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Metric pool not found".to_string()))?;
+    // Validate metric exists and is owned by the caller.
+    ensure_metric_owned(&state, payload.metric_pool_id, &user).await?;
 
     // Validate schedule_type
     let valid_types = ["hourly", "daily", "weekly", "monthly", "cron"];
@@ -76,8 +115,8 @@ pub async fn create_schedule(
     // Use ON DUPLICATE KEY UPDATE to handle the case where a schedule already exists
     // (e.g., a disabled one from a previous manual snapshot)
     sqlx::query(
-        "INSERT INTO metric_snapshot_schedules (metric_pool_id, schedule_type, cron_expr, retention_days, enabled, next_run_at)
-         VALUES (?, ?, ?, ?, 1, ?)
+        "INSERT INTO metric_snapshot_schedules (metric_pool_id, schedule_type, cron_expr, retention_days, enabled, next_run_at, owner_user_id)
+         VALUES (?, ?, ?, ?, 1, ?, ?)
          ON DUPLICATE KEY UPDATE schedule_type=VALUES(schedule_type), cron_expr=VALUES(cron_expr),
            retention_days=VALUES(retention_days), enabled=1, next_run_at=VALUES(next_run_at), updated_at=CURRENT_TIMESTAMP",
     )
@@ -86,9 +125,10 @@ pub async fn create_schedule(
     .bind(&payload.cron_expr)
     .bind(payload.retention_days)
     .bind(&next_run)
+    .bind(user.id)
     .execute(&state.db)
     .await
-    .map_err(crate::routes::internal_error)?;
+    .map_err(internal_error)?;
 
     let schedule = sqlx::query_as::<_, MetricSnapshotSchedule>(
         "SELECT * FROM metric_snapshot_schedules WHERE metric_pool_id = ?",
@@ -104,17 +144,11 @@ pub async fn create_schedule(
 /// Update a snapshot schedule.
 pub async fn update_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<UpdateSnapshotSchedule>,
 ) -> Result<Json<MetricSnapshotSchedule>, (StatusCode, String)> {
-    let existing = sqlx::query_as::<_, MetricSnapshotSchedule>(
-        "SELECT * FROM metric_snapshot_schedules WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(crate::routes::internal_error)?
-    .ok_or((StatusCode::NOT_FOUND, "Schedule not found".to_string()))?;
+    let existing = load_owned_schedule(&state, id, &user).await?;
 
     let schedule_type = payload.schedule_type.as_deref().unwrap_or(&existing.schedule_type);
     let cron_expr = payload.cron_expr.as_deref().or(existing.cron_expr.as_deref());
@@ -154,17 +188,15 @@ pub async fn update_schedule(
 /// Delete a snapshot schedule (and all its snapshots via CASCADE).
 pub async fn delete_schedule(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let result = sqlx::query("DELETE FROM metric_snapshot_schedules WHERE id = ?")
+    load_owned_schedule(&state, id, &user).await?;
+    sqlx::query("DELETE FROM metric_snapshot_schedules WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(crate::routes::internal_error)?;
-
-    if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Schedule not found".to_string()));
-    }
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -180,9 +212,11 @@ pub struct SnapshotListQuery {
 /// List snapshots for a metric.
 pub async fn list_snapshots(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(metric_id): Path<i32>,
     Query(params): Query<SnapshotListQuery>,
 ) -> Result<Json<Vec<MetricSnapshot>>, (StatusCode, String)> {
+    ensure_metric_owned(&state, metric_id, &user).await?;
     let limit = params.limit.unwrap_or(50).min(200);
 
     let snapshots = if let Some(ref pt) = params.period_type {
@@ -218,9 +252,11 @@ pub struct CompareQuery {
 /// Compare two snapshots (YoY, MoM, or arbitrary periods).
 pub async fn compare_snapshots(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(metric_id): Path<i32>,
     Query(params): Query<CompareQuery>,
 ) -> Result<Json<SnapshotComparison>, (StatusCode, String)> {
+    ensure_metric_owned(&state, metric_id, &user).await?;
     let current = sqlx::query_as::<_, MetricSnapshot>(
         "SELECT * FROM metric_snapshots WHERE metric_pool_id = ? AND period_type = ? AND period_key = ? ORDER BY snapshot_at DESC LIMIT 1",
     )
@@ -253,14 +289,19 @@ pub async fn compare_snapshots(
 /// Manually trigger a snapshot for a metric (immediate capture).
 pub async fn take_snapshot(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(metric_id): Path<i32>,
 ) -> Result<(StatusCode, Json<MetricSnapshot>), (StatusCode, String)> {
+    ensure_metric_owned(&state, metric_id, &user).await?;
     let metric = sqlx::query_as::<_, MetricPool>("SELECT * FROM metric_pools WHERE id = ?")
         .bind(metric_id)
         .fetch_optional(&state.db)
         .await
         .map_err(crate::routes::internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "Metric not found".to_string()))?;
+
+    // Access to the underlying datasource may have been revoked since creation.
+    crate::routes::datasources::ensure_access(&state, metric.datasource_id, &user).await?;
 
     let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(metric.datasource_id)
@@ -319,13 +360,16 @@ pub async fn take_snapshot(
 /// Delete a specific snapshot.
 pub async fn delete_snapshot(
     State(state): State<Arc<AppState>>,
-    Path((_metric_id, snapshot_id)): Path<(i32, i32)>,
+    Extension(user): Extension<AuthUser>,
+    Path((metric_id, snapshot_id)): Path<(i32, i32)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let result = sqlx::query("DELETE FROM metric_snapshots WHERE id = ?")
+    ensure_metric_owned(&state, metric_id, &user).await?;
+    let result = sqlx::query("DELETE FROM metric_snapshots WHERE id = ? AND metric_pool_id = ?")
         .bind(snapshot_id)
+        .bind(metric_id)
         .execute(&state.db)
         .await
-        .map_err(crate::routes::internal_error)?;
+        .map_err(internal_error)?;
 
     if result.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "Snapshot not found".to_string()));

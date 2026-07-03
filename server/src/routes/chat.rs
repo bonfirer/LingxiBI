@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::llm::{ChatMessage, LlmClient, StreamChunk};
 use crate::llm::prompts;
 use crate::models::*;
+use crate::routes::auth::AuthUser;
 use crate::routes::query;
 use crate::AppState;
 
@@ -17,20 +18,45 @@ pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     // Browsers can't set Authorization headers on WebSocket connections, so the
-    // token is passed as a query param (?token=...). Validate before upgrading.
-    let authorized = params
+    // token is passed as a query param (?token=...). Validate before upgrading
+    // and capture the caller's identity for per-conversation ownership checks.
+    let auth = params
         .get("token")
-        .map(|t| crate::routes::auth::validate_token(t).is_ok())
-        .unwrap_or(false);
+        .and_then(|t| crate::routes::auth::validate_session(t).ok());
 
-    if !authorized {
+    let Some((user_id, is_admin)) = auth else {
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, AuthUser { id: user_id, is_admin }))
 }
 
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
+/// Verify the caller owns a conversation (admins bypass). Returns false for
+/// missing conversations too, so callers treat both as "no access".
+async fn owns_conversation(state: &AppState, cid: i32, user: &AuthUser) -> bool {
+    if user.is_admin {
+        // Admins may act on any existing conversation.
+        return sqlx::query_scalar::<_, i32>("SELECT id FROM conversations WHERE id = ?")
+            .bind(cid)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+    }
+    sqlx::query_scalar::<_, i32>(
+        "SELECT id FROM conversations WHERE id = ? AND owner_user_id = ?",
+    )
+    .bind(cid)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
     let (mut sender, mut receiver) = socket.split();
 
     let _ = sender
@@ -67,6 +93,34 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         .and_then(|v| v.as_str())
                         .unwrap_or("zh")
                         .to_string();
+
+                    // Enforce ownership: a caller may only chat within their own
+                    // conversation (admins bypass). Reject foreign conversation ids
+                    // so nobody can read/inject into someone else's thread.
+                    if let Some(cid) = conversation_id {
+                        if !owns_conversation(&state, cid, &user).await {
+                            let _ = sender
+                                .send(WsMessage::Text(
+                                    serde_json::json!({"type": "error", "message": "Conversation not found"}).to_string().into(),
+                                ))
+                                .await;
+                            continue;
+                        }
+                    }
+
+                    // Enforce datasource access: chat generates + runs SQL against
+                    // the chosen datasource, so members may only target ones granted
+                    // to them (admins bypass).
+                    if let Some(dsid) = datasource_id {
+                        if crate::routes::datasources::ensure_access(&state, dsid, &user).await.is_err() {
+                            let _ = sender
+                                .send(WsMessage::Text(
+                                    serde_json::json!({"type": "error", "message": "Data source not found"}).to_string().into(),
+                                ))
+                                .await;
+                            continue;
+                        }
+                    }
 
                     // Run the chat handler while concurrently listening for a "stop"
                     // action so the user can interrupt mid-generation.

@@ -1,11 +1,13 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::ensure_admin;
 use crate::AppState;
 
 /// List all examples, optionally by datasource.
@@ -41,8 +43,10 @@ pub async fn list_by_datasource(
 /// Create a new example (thumbs-up from conversation).
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<CreateAiExample>,
 ) -> Result<(StatusCode, Json<AiExample>), (StatusCode, String)> {
+    ensure_admin(&user)?;
     let category = payload.category.as_deref().unwrap_or("sql");
 
     let result = sqlx::query(
@@ -68,8 +72,10 @@ pub async fn create(
 /// Delete an example.
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    ensure_admin(&user)?;
     sqlx::query("DELETE FROM ai_examples WHERE id = ?")
         .bind(id)
         .execute(&state.db)

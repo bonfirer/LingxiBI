@@ -1,9 +1,10 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
+use crate::routes::auth::AuthUser;
 use crate::AppState;
 
 #[derive(sqlx::FromRow, serde::Serialize)]
@@ -14,13 +15,15 @@ pub struct Achievement {
     pub unlocked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// List all achievements for user_id=1 (single-user for now).
+/// List the current user's achievements.
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<Achievement>>, (StatusCode, String)> {
     let achievements = sqlx::query_as::<_, Achievement>(
-        "SELECT * FROM achievements WHERE user_id = 1 ORDER BY unlocked_at DESC"
+        "SELECT * FROM achievements WHERE user_id = ? ORDER BY unlocked_at DESC"
     )
+    .bind(user.id)
     .fetch_all(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;

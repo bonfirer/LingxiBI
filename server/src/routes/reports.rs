@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -9,23 +9,47 @@ use std::collections::HashMap;
 use crate::llm::LlmClient;
 use crate::llm::prompts;
 use crate::models::*;
+use crate::routes::auth::AuthUser;
+use crate::routes::{ensure_owner, internal_error};
 use crate::AppState;
+
+/// Fetch a report by id and verify the caller owns it (admins bypass).
+/// Returns 404 for missing OR non-owned reports so ownership isn't leaked.
+async fn load_owned_report(
+    state: &AppState,
+    id: i32,
+    user: &AuthUser,
+) -> Result<Report, (StatusCode, String)> {
+    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Report not found".to_string()))?;
+    ensure_owner(user, report.owner_user_id)?;
+    Ok(report)
+}
 
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<Report>>, (StatusCode, String)> {
     // Exclude the heavy LONGTEXT columns from the list. The sidebar polls this
     // frequently, so sending full HTML for every report is wasteful.
     // We return a tiny marker ('1') for html_content/published_html so the frontend
     // can still tell whether content exists (used for status dots) without the payload.
+    // Scope to the caller's own reports; admins (?=1) see everything.
     let reports = sqlx::query_as::<_, Report>(
         "SELECT id, title, description, group_id, pool_ids, config, data_cache, status, \
          share_token, share_public, layout_config, \
          CASE WHEN html_content IS NOT NULL THEN '1' END AS html_content, \
          CASE WHEN published_html IS NOT NULL THEN '1' END AS published_html, \
-         refresh_interval, generation_status, generation_error, style_key, design_score, created_at, updated_at \
-         FROM reports ORDER BY updated_at DESC",
+         refresh_interval, generation_status, generation_error, style_key, design_score, \
+         owner_user_id, created_at, updated_at \
+         FROM reports WHERE (owner_user_id = ? OR ? = 1) ORDER BY updated_at DESC",
     )
+    .bind(user.id)
+    .bind(user.is_admin as i32)
     .fetch_all(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;
@@ -35,6 +59,7 @@ pub async fn list(
 
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<CreateReport>,
 ) -> Result<(StatusCode, Json<Report>), (StatusCode, String)> {
     // Build default visualization config based on pool count
@@ -65,13 +90,14 @@ pub async fn create(
         .map_err(crate::routes::internal_error)?;
 
     let result = sqlx::query(
-        "INSERT INTO reports (title, description, pool_ids, config, group_id) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO reports (title, description, pool_ids, config, group_id, owner_user_id) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&payload.title)
     .bind(&payload.description)
     .bind(&pool_ids_json)
     .bind(&config)
     .bind(payload.group_id)
+    .bind(user.id)
     .execute(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;
@@ -87,42 +113,38 @@ pub async fn create(
 
 pub async fn get_one(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
-    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Report not found".to_string()))?;
-
+    let report = load_owned_report(&state, id, &user).await?;
     Ok(Json(report))
 }
 
 pub async fn render(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(body): Json<RenderRequest>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
-    // Validate report exists
-    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Report not found".to_string()))?;
+    // Validate report exists and is owned by the caller.
+    let report = load_owned_report(&state, id, &user).await?;
 
     if let Some(prompt) = body.prompt.clone() {
         // Optionally load a saved theme to generate in (full row incl. sample_html).
         let theme = if let Some(theme_id) = body.theme_id {
-            sqlx::query_as::<_, ReportTheme>(
+            let t = sqlx::query_as::<_, ReportTheme>(
                 "SELECT id, name, description, style_prompt, sample_html, emoji, \
-                 source_report_id, created_at, updated_at FROM report_themes WHERE id = ?",
+                 source_report_id, owner_user_id, created_at, updated_at FROM report_themes WHERE id = ?",
             )
             .bind(theme_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(crate::routes::internal_error)?
+            .map_err(crate::routes::internal_error)?;
+            // You can only generate with a theme you own.
+            if let Some(t) = &t {
+                ensure_owner(&user, t.owner_user_id)?;
+            }
+            t
         } else {
             None
         };
@@ -166,9 +188,10 @@ pub async fn render(
                     // Score the design asynchronously
                     let db = state_clone.db.clone();
                     let html_clone = html.clone();
+                    let achievements_user = report_clone.owner_user_id.unwrap_or(1);
                     tokio::spawn(async move {
                         score_report_design(&db, id, &html_clone).await;
-                        crate::routes::achievements::check_achievements(&db, 1).await;
+                        crate::routes::achievements::check_achievements(&db, achievements_user).await;
                     });
                 }
                 Err((_, err_msg)) => {
@@ -206,12 +229,15 @@ pub async fn render(
 /// Get the generation status of a report (for async polling).
 pub async fn get_status(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT generation_status, generation_error, updated_at FROM reports WHERE id = ?"
+        "SELECT generation_status, generation_error, updated_at FROM reports WHERE id = ? AND (owner_user_id = ? OR ? = 1)"
     )
     .bind(id)
+    .bind(user.id)
+    .bind(user.is_admin as i32)
     .fetch_optional(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;
@@ -419,8 +445,11 @@ fn extract_html(text: &str) -> String {
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
+
     let result = sqlx::query("DELETE FROM reports WHERE id = ?")
         .bind(id)
         .execute(&state.db)
@@ -437,9 +466,11 @@ pub async fn delete(
 /// Publish or unpublish a report.
 pub async fn publish(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<PublishReport>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     let status = if payload.status == "published" { "published" } else { "draft" };
 
     if status == "published" {
@@ -469,8 +500,10 @@ pub async fn publish(
 /// Rollback html_content to the last published version.
 pub async fn rollback(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     // Copy published_html back to html_content
     sqlx::query("UPDATE reports SET html_content = published_html, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
         .bind(id)
@@ -490,9 +523,11 @@ pub async fn rollback(
 /// Generate or update share link for a report.
 pub async fn share(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(payload): Json<ShareReport>,
 ) -> Result<Json<ShareInfo>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     // Check if token already exists
     let existing: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT share_token FROM reports WHERE id = ?",
@@ -597,17 +632,13 @@ fn shared_offline_page() -> String {
 
 pub async fn get_html(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<axum::response::Html<String>, (StatusCode, String)> {
     let preview = params.get("preview").map(|v| v == "1" || v == "true").unwrap_or(false);
 
-    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Report not found".to_string()))?;
+    let report = load_owned_report(&state, id, &user).await?;
 
     let mut html = report.html_content.unwrap_or_else(|| {
         "<html><body style='background:#0d0d14;color:#9ca3af;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui'><p>No HTML content generated yet. Use AI to generate a dashboard.</p></body></html>".to_string()
@@ -711,8 +742,11 @@ pub async fn view_shared_html(
 /// This endpoint is called by the HTML page inside the iframe to get fresh data.
 pub async fn get_live_data(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
+
     let report_ds: Vec<ReportDataSource> = sqlx::query_as::<_, ReportDataSource>(
         "SELECT * FROM report_datasources WHERE report_id = ?"
     )
@@ -753,9 +787,11 @@ pub async fn get_live_data(
 /// Update the refresh interval for a report.
 pub async fn update_refresh_interval(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     let interval = body.get("refresh_interval")
         .and_then(|v| v.as_i64())
         .unwrap_or(1) as i32;
@@ -779,9 +815,11 @@ pub async fn update_refresh_interval(
 /// Update the style_key for a report.
 pub async fn update_style(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     let style_key = body.get("style_key").and_then(|v| v.as_str());
 
     sqlx::query("UPDATE reports SET style_key = ? WHERE id = ?")
@@ -872,8 +910,10 @@ pub struct ReportVersion {
 /// List versions (without HTML content — just metadata).
 pub async fn list_versions(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<Vec<ReportVersion>>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     let versions = sqlx::query_as::<_, ReportVersion>(
         "SELECT id, report_id, version, prompt, style_key, created_at FROM report_versions WHERE report_id = ? ORDER BY version DESC"
     )
@@ -888,8 +928,10 @@ pub async fn list_versions(
 /// Get HTML content of a specific version (for preview).
 pub async fn get_version_html(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path((report_id, version_id)): Path<(i32, i32)>,
 ) -> Result<axum::response::Html<String>, (StatusCode, String)> {
+    load_owned_report(&state, report_id, &user).await?;
     let html: Option<(String,)> = sqlx::query_as(
         "SELECT html_content FROM report_versions WHERE report_id = ? AND id = ?"
     )
@@ -908,8 +950,10 @@ pub async fn get_version_html(
 /// Delete a specific version.
 pub async fn delete_version(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path((report_id, version_id)): Path<(i32, i32)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    load_owned_report(&state, report_id, &user).await?;
     let result = sqlx::query(
         "DELETE FROM report_versions WHERE report_id = ? AND id = ?"
     )
@@ -929,8 +973,10 @@ pub async fn delete_version(
 /// Restore a specific version — copy its HTML to the report's html_content.
 pub async fn restore_version(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path((report_id, version_id)): Path<(i32, i32)>,
 ) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, report_id, &user).await?;
     let html: Option<(String,)> = sqlx::query_as(
         "SELECT html_content FROM report_versions WHERE report_id = ? AND id = ?"
     )
@@ -1066,8 +1112,10 @@ async fn build_summary_context(
 /// GET the cached AI summary for a report (if any).
 pub async fn get_summary(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
     let row: Option<(serde_json::Value, String, String, Option<chrono::DateTime<chrono::Utc>>)> =
         sqlx::query_as(
             "SELECT summary, model, lang, updated_at FROM report_summaries WHERE report_id = ?",
@@ -1091,15 +1139,11 @@ pub async fn get_summary(
 /// POST — (re)generate the AI data summary for a report and cache it.
 pub async fn generate_summary(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(body): Json<GenerateSummaryRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Report not found".to_string()))?;
+    let report = load_owned_report(&state, id, &user).await?;
 
     let llm_cfg = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
         .fetch_optional(&state.db)
@@ -1174,6 +1218,7 @@ pub async fn generate_summary(
 /// POST — answer a grounded question about a report's data (Q&A over the report).
 pub async fn ask_report(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Json(body): Json<ReportQaRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -1182,12 +1227,7 @@ pub async fn ask_report(
         return Err((StatusCode::BAD_REQUEST, "Question is empty".to_string()));
     }
 
-    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::routes::internal_error)?
-        .ok_or((StatusCode::NOT_FOUND, "Report not found".to_string()))?;
+    let report = load_owned_report(&state, id, &user).await?;
 
     let llm_cfg = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
         .fetch_optional(&state.db)

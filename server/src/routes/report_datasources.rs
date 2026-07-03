@@ -1,19 +1,41 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
 use crate::routes::query;
+use crate::routes::{ensure_owner, internal_error};
 use crate::AppState;
+
+/// Verify the caller owns the parent report (admins bypass). 404 otherwise.
+async fn ensure_report_owned(
+    state: &AppState,
+    report_id: i32,
+    user: &AuthUser,
+) -> Result<(), (StatusCode, String)> {
+    let r: Option<(Option<i32>,)> =
+        sqlx::query_as("SELECT owner_user_id FROM reports WHERE id = ?")
+            .bind(report_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(internal_error)?;
+    match r {
+        Some((owner,)) => ensure_owner(user, owner),
+        None => Err((StatusCode::NOT_FOUND, "Report not found".to_string())),
+    }
+}
 
 /// List all datasources for a report.
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(report_id): Path<i32>,
 ) -> Result<Json<Vec<ReportDataSource>>, (StatusCode, String)> {
+    ensure_report_owned(&state, report_id, &user).await?;
     let items = sqlx::query_as::<_, ReportDataSource>(
         "SELECT * FROM report_datasources WHERE report_id = ? ORDER BY created_at ASC",
     )
@@ -28,9 +50,13 @@ pub async fn list(
 /// Add a datasource to a report (from metric or custom SQL).
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(report_id): Path<i32>,
     Json(payload): Json<CreateReportDataSource>,
 ) -> Result<(StatusCode, Json<ReportDataSource>), (StatusCode, String)> {
+    ensure_report_owned(&state, report_id, &user).await?;
+    // Require access to the datasource this report dataset runs against.
+    crate::routes::datasources::ensure_access(&state, payload.datasource_id, &user).await?;
     // If linking from a metric, copy its result_cache
     let (result_cache, row_count): (Option<serde_json::Value>, Option<i32>) =
         if let Some(mid) = payload.metric_id {
@@ -75,8 +101,10 @@ pub async fn create(
 /// Remove a datasource from a report.
 pub async fn remove(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path((report_id, ds_id)): Path<(i32, i32)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    ensure_report_owned(&state, report_id, &user).await?;
     let result = sqlx::query("DELETE FROM report_datasources WHERE id = ? AND report_id = ?")
         .bind(ds_id)
         .bind(report_id)
@@ -94,8 +122,10 @@ pub async fn remove(
 /// Refresh a report datasource (re-execute SQL).
 pub async fn refresh(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path((report_id, ds_id)): Path<(i32, i32)>,
 ) -> Result<Json<ReportDataSource>, (StatusCode, String)> {
+    ensure_report_owned(&state, report_id, &user).await?;
     let item = sqlx::query_as::<_, ReportDataSource>(
         "SELECT * FROM report_datasources WHERE id = ? AND report_id = ?",
     )
@@ -105,6 +135,9 @@ pub async fn refresh(
     .await
     .map_err(crate::routes::internal_error)?
     .ok_or((StatusCode::NOT_FOUND, "Not found".to_string()))?;
+
+    // Access to the underlying datasource may have been revoked since creation.
+    crate::routes::datasources::ensure_access(&state, item.datasource_id, &user).await?;
 
     query::validate_sql(&item.sql_query)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;

@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use sqlx::Column;
 use sqlx::Row;
@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 
 use crate::models::*;
+use crate::routes::auth::AuthUser;
 use crate::AppState;
 
 /// Maximum rows to return from any query.
@@ -186,8 +187,12 @@ pub fn validate_sql(sql: &str) -> Result<(), String> {
 
 pub async fn execute(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Json<QueryResult>, (StatusCode, String)> {
+    // Enforce datasource-level access before running any SQL.
+    crate::routes::datasources::ensure_access(&state, req.datasource_id, &user).await?;
+
     // Get datasource connection info
     let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
         .bind(req.datasource_id)
@@ -256,6 +261,7 @@ pub async fn execute_validated(
 
 pub async fn get_pool(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(pool_id): Path<i32>,
 ) -> Result<Json<DataPool>, (StatusCode, String)> {
     let pool = sqlx::query_as::<_, DataPool>("SELECT * FROM data_pools WHERE id = ?")
@@ -264,6 +270,9 @@ pub async fn get_pool(
         .await
         .map_err(crate::routes::internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "Data pool not found".to_string()))?;
+
+    // A data pool exposes rows from a datasource — gate it by datasource access.
+    crate::routes::datasources::ensure_access(&state, pool.datasource_id, &user).await?;
 
     Ok(Json(pool))
 }
