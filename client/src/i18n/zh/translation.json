@@ -149,7 +149,13 @@
       "description": "与 AI 开始对话，选择数据池，生成您的第一份报表。"
     },
     "visualization": "{{count}} 个可视化",
-    "visualization_plural": "{{count}} 个可视化"
+    "visualization_plural": "{{count}} 个可视化",
+    "pagination": {
+      "summary": "第 {{from}}-{{to}} 个，共 {{total}} 个",
+      "prev": "上一页",
+      "next": "下一页",
+      "page": "第 {{page}} / {{pages}} 页"
+    }
   },
   "reportDetail": {
     "backToReports": "返回报表列表",

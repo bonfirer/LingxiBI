@@ -67,7 +67,7 @@ export default function AssetPanel() {
 
   return (
     <aside className="w-[190px] bg-obsidian-900 border-r border-obsidian-700 flex flex-col flex-shrink-0 overflow-hidden">
-      <div className="p-2.5 flex-1 overflow-y-auto scrollbar-thin">
+      <div className="px-2.5 pb-2.5 flex-1 overflow-y-auto scrollbar-thin">
         {section === 'datasources' && <DataSourcesKGPanel t={t} navigate={navigate} />}
         {section === 'reports' && <ReportsPanel t={t} navigate={navigate} />}
         {section === 'metrics' && <MetricsPanel t={t} navigate={navigate} />}
@@ -114,7 +114,7 @@ function DataSourcesKGPanel({ t, navigate }: { t: (k: string) => string; navigat
   return (
     <>
       {/* Header with add button */}
-      <div className="flex items-center justify-between mb-1.5">
+      <div className="sticky top-0 z-10 bg-obsidian-900 -mx-2.5 px-2.5 pt-2.5 pb-1.5 flex items-center justify-between">
         <span className="text-amber-500 text-[10px] font-bold tracking-wide uppercase">
           {t('assetPanel.dataSources')}
         </span>
@@ -436,32 +436,34 @@ function ReportsPanel({ t, navigate }: { t: (k: string) => string; navigate: (p:
 
   return (
     <>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-amber-500 text-[10px] font-bold tracking-wide uppercase">{t('nav.reports')}</span>
-        <div className="flex items-center gap-1">
-          <button onClick={() => { setShowNewReport(true); if (activeGroupId !== null) { setCollapsed((prev) => { const next = new Set(prev); next.delete(activeGroupId); return next; }); } }} className="text-amber-500 hover:text-amber-400 transition-premium" title={t('reports.newReport')}>
-            <Plus size={13} weight="bold" />
-          </button>
-          <button onClick={() => setShowNewGroup(true)} className="text-gray-500 hover:text-gray-300 transition-premium" title={t('reports.newGroup')}>
-            <Folder size={12} />
-          </button>
+      <div className="sticky top-0 z-10 bg-obsidian-900 -mx-2.5 px-2.5 pt-2.5">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-amber-500 text-[10px] font-bold tracking-wide uppercase">{t('nav.reports')}</span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => { setShowNewReport(true); if (activeGroupId !== null) { setCollapsed((prev) => { const next = new Set(prev); next.delete(activeGroupId); return next; }); } }} className="text-amber-500 hover:text-amber-400 transition-premium" title={t('reports.newReport')}>
+              <Plus size={13} weight="bold" />
+            </button>
+            <button onClick={() => setShowNewGroup(true)} className="text-gray-500 hover:text-gray-300 transition-premium" title={t('reports.newGroup')}>
+              <Folder size={12} />
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Search */}
-      <div className="relative mb-2">
-        <MagnifyingGlass size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t('reports.searchPlaceholder') || '搜索报表...'}
-          className="w-full bg-obsidian-800 border border-obsidian-700 rounded-md pl-6 pr-2 py-1 text-[10px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition-premium"
-        />
-        {search && (
-          <button onClick={() => setSearch('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
-            <X size={10} />
-          </button>
-        )}
+        {/* Search */}
+        <div className="relative mb-2">
+          <MagnifyingGlass size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('reports.searchPlaceholder') || '搜索报表...'}
+            className="w-full bg-obsidian-800 border border-obsidian-700 rounded-md pl-6 pr-2 py-1 text-[10px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition-premium"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
+              <X size={10} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Search results */}
@@ -751,25 +753,27 @@ function MetricsPanel({ t, navigate }: { t: (k: string) => string; navigate: (p:
 
   return (
     <>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-amber-500 text-[10px] font-bold tracking-wide uppercase">{t('nav.metrics')}</span>
-        <span className="text-[9px] text-gray-600">{metrics.length}</span>
-      </div>
+      <div className="sticky top-0 z-10 bg-obsidian-900 -mx-2.5 px-2.5 pt-2.5">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-amber-500 text-[10px] font-bold tracking-wide uppercase">{t('nav.metrics')}</span>
+          <span className="text-[9px] text-gray-600">{metrics.length}</span>
+        </div>
 
-      {/* Search */}
-      <div className="relative mb-2">
-        <MagnifyingGlass size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t('metrics.searchPlaceholder') || '搜索指标...'}
-          className="w-full bg-obsidian-800 border border-obsidian-700 rounded-md pl-6 pr-2 py-1 text-[10px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition-premium"
-        />
-        {search && (
-          <button onClick={() => setSearch('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
-            <X size={10} />
-          </button>
-        )}
+        {/* Search */}
+        <div className="relative mb-2">
+          <MagnifyingGlass size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('metrics.searchPlaceholder') || '搜索指标...'}
+            className="w-full bg-obsidian-800 border border-obsidian-700 rounded-md pl-6 pr-2 py-1 text-[10px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition-premium"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
+              <X size={10} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Search results (flat list) */}

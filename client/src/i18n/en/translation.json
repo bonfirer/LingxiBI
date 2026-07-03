@@ -149,7 +149,13 @@
       "description": "Start a conversation with AI, select data pools, and generate your first report."
     },
     "visualization": "{{count}} visualization",
-    "visualization_plural": "{{count}} visualizations"
+    "visualization_plural": "{{count}} visualizations",
+    "pagination": {
+      "summary": "{{from}}-{{to}} of {{total}}",
+      "prev": "Previous",
+      "next": "Next",
+      "page": "Page {{page}} / {{pages}}"
+    }
   },
   "reportDetail": {
     "backToReports": "Back to Reports",

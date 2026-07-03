@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ChartBar, Trash, ArrowRight, Clock, ChatCircle, Plus, X } from '@phosphor-icons/react';
+import { ChartBar, Trash, ArrowRight, Clock, ChatCircle, Plus, X, CaretLeft, CaretRight } from '@phosphor-icons/react';
 import { reportsApi } from '../lib/api';
 import type { Report } from '../lib/types';
 import { PageHeader, ErrorBanner, EmptyState, ConfirmDialog } from '../components/ui';
@@ -18,6 +18,14 @@ export default function ReportsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [creating, setCreating] = useState(false);
+  const [page, setPage] = useState(1);
+
+  const PAGE_SIZE = 6;
+  const totalPages = Math.max(1, Math.ceil(reports.length / PAGE_SIZE));
+  // Clamp the current page if the list shrinks (e.g. after a delete).
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pagedReports = reports.slice(pageStart, pageStart + PAGE_SIZE);
 
   const fetchReports = useCallback(async () => {
     try {
@@ -167,7 +175,7 @@ export default function ReportsPage() {
       {/* Report Cards */}
       {!loading && reports.length > 0 && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {reports.map((report, i) => {
+          {pagedReports.map((report, i) => {
             const visCount = report.config?.visualizations?.length || 0;
             const visTypes = report.config?.visualizations?.map((v) => v.type) || [];
             return (
@@ -268,6 +276,40 @@ export default function ReportsPage() {
         </div>
       )}
 
+      {/* Pagination */}
+      {!loading && reports.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between mt-5">
+          <span className="text-[11px] text-gray-500">
+            {t('reports.pagination.summary', {
+              from: pageStart + 1,
+              to: Math.min(pageStart + PAGE_SIZE, reports.length),
+              total: reports.length,
+            })}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+              className="flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 border border-obsidian-700 hover:border-obsidian-600 px-2.5 py-1.5 rounded-lg transition-premium disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <CaretLeft size={12} />
+              {t('reports.pagination.prev')}
+            </button>
+            <span className="text-[11px] text-gray-400 tabular-nums px-1">
+              {t('reports.pagination.page', { page: currentPage, pages: totalPages })}
+            </span>
+            <button
+              onClick={() => setPage(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+              className="flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 border border-obsidian-700 hover:border-obsidian-600 px-2.5 py-1.5 rounded-lg transition-premium disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t('reports.pagination.next')}
+              <CaretRight size={12} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Create Report Modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowCreate(false)}>
@@ -333,10 +375,47 @@ function ReportCardStatusDot({ report }: { report: Report }) {
   return <span className="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0" title="未生成" />;
 }
 
+// Global gate limiting how many preview iframes load at once. Loading every
+// visible card's iframe simultaneously saturates the browser's per-origin
+// connection cap, and a single slow response could leave the rest of the
+// thumbnails spinning forever. We cap concurrency and hand slots out in order.
+const PREVIEW_MAX_CONCURRENT = 3;
+// Safety net: never let one stalled iframe hold its slot indefinitely.
+const PREVIEW_LOAD_TIMEOUT_MS = 15000;
+
+let previewActive = 0;
+const previewQueue: (() => void)[] = [];
+
+// Run `task` when a slot is free (immediately, or once one is released).
+// Returns a `cancel` fn that removes the task if it hasn't started yet.
+function schedulePreview(task: () => void): () => void {
+  if (previewActive < PREVIEW_MAX_CONCURRENT) {
+    previewActive++;
+    task();
+    return () => {};
+  }
+  previewQueue.push(task);
+  return () => {
+    const i = previewQueue.indexOf(task);
+    if (i >= 0) previewQueue.splice(i, 1);
+  };
+}
+
+// Free a held slot: hand it directly to the next waiter, or decrement.
+function releasePreviewSlot() {
+  const next = previewQueue.shift();
+  if (next) {
+    next();
+  } else if (previewActive > 0) {
+    previewActive--;
+  }
+}
+
 // Lazy-mounted static preview: the iframe is only created once the card scrolls
 // into view, and loads in preview mode (?preview=1) so no live SQL queries run.
 function LazyReportPreview({ report }: { report: Report }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const releaseRef = useRef<(() => void) | null>(null);
   const [visible, setVisible] = useState(false);
   const [src, setSrc] = useState<string | null>(null);
 
@@ -356,20 +435,48 @@ function LazyReportPreview({ report }: { report: Report }) {
     return () => observer.disconnect();
   }, []);
 
-  // Once visible, mint a short-lived embed token (cached/shared across cards)
-  // rather than putting the long-lived session JWT in the iframe URL.
+  // Once visible, wait for a free concurrency slot, then mint a short-lived
+  // embed token (cached/shared across cards) rather than putting the long-lived
+  // session JWT in the iframe URL.
   useEffect(() => {
     if (!visible) return;
-    let active = true;
-    fetchEmbedToken().then((embed) => {
-      if (!active) return;
-      const token = embed || localStorage.getItem('token') || '';
-      setSrc(
-        `/api/reports/${report.id}/html?preview=1&token=${encodeURIComponent(token)}&t=${report.updated_at || ''}`
-      );
+    let disposed = false;
+    let started = false; // whether our task ran (i.e. we hold a slot)
+    let released = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (timeout) clearTimeout(timeout);
+      releasePreviewSlot();
+    };
+    releaseRef.current = release;
+
+    const cancel = schedulePreview(() => {
+      started = true;
+      if (disposed) {
+        release();
+        return;
+      }
+      fetchEmbedToken().then((embed) => {
+        if (disposed) {
+          release();
+          return;
+        }
+        const token = embed || localStorage.getItem('token') || '';
+        setSrc(
+          `/api/reports/${report.id}/html?preview=1&token=${encodeURIComponent(token)}&t=${report.updated_at || ''}`
+        );
+        // Release the slot even if onLoad never fires (stalled/failed iframe).
+        timeout = setTimeout(release, PREVIEW_LOAD_TIMEOUT_MS);
+      });
     });
+
     return () => {
-      active = false;
+      disposed = true;
+      if (started) release();
+      else cancel();
     };
   }, [visible, report.id, report.updated_at]);
 
@@ -382,6 +489,8 @@ function LazyReportPreview({ report }: { report: Report }) {
           style={{ transform: 'scale(0.35)', transformOrigin: 'top left', width: '286%', height: '286%' }}
           tabIndex={-1}
           loading="lazy"
+          onLoad={() => releaseRef.current?.()}
+          onError={() => releaseRef.current?.()}
         />
       ) : (
         <div className="h-full flex items-center justify-center">
