@@ -511,7 +511,9 @@
     "createAccount": "创建账号",
     "loading": "验证中...",
     "failed": "登录失败",
-    "sessionExpired": "登录已过期，请重新登录。"
+    "sessionExpired": "登录已过期，请重新登录。",
+    "or": "或",
+    "githubSignIn": "使用 GitHub 登录"
   },
   "errors": {
     "loadFailed": "加载失败",

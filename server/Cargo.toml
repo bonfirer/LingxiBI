@@ -28,4 +28,5 @@ rust_xlsxwriter = "0.79"
 # HMAC-SHA256 signing for the Feishu (Lark) custom-bot webhook.
 hmac = "0.12"
 sha2 = "0.10"
+urlencoding = "2"
 base64 = "0.22"

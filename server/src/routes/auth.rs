@@ -268,8 +268,10 @@ pub struct LoginRequest {
 #[derive(serde::Serialize)]
 pub struct LoginResponse {
     pub token: String,
+    pub id: i32,
     pub username: String,
     pub display_name: Option<String>,
+    pub role: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -331,10 +333,14 @@ pub async fn login(
     )
     .map_err(internal)?;
 
+    let role = user.role.as_deref().unwrap_or("admin").to_string();
+
     Ok(Json(LoginResponse {
         token,
+        id: user.id,
         username: user.username,
         display_name: user.display_name,
+        role,
     }))
 }
 
@@ -645,4 +651,185 @@ pub async fn delete_user(
         .map_err(internal)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── GitHub OAuth ──
+
+/// Whether GitHub OAuth is configured (both env vars present and non-empty).
+pub fn github_oauth_enabled() -> bool {
+    std::env::var("GITHUB_CLIENT_ID").map(|v| !v.is_empty()).unwrap_or(false)
+        && std::env::var("GITHUB_CLIENT_SECRET").map(|v| !v.is_empty()).unwrap_or(false)
+}
+
+/// GET /api/auth/github — returns the GitHub OAuth authorization URL.
+/// The frontend opens this URL to start the OAuth flow.
+pub async fn github_login() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let client_id = std::env::var("GITHUB_CLIENT_ID")
+        .map_err(|_| (StatusCode::NOT_IMPLEMENTED, "GitHub OAuth not configured".to_string()))?;
+    if client_id.is_empty() {
+        return Err((StatusCode::NOT_IMPLEMENTED, "GitHub OAuth not configured".to_string()));
+    }
+
+    // The redirect_uri isn't hard-coded; we let the browser's origin handle it.
+    // GitHub will redirect to the callback URL configured in the OAuth App settings.
+    let url = format!(
+        "https://github.com/login/oauth/authorize?client_id={}&scope=user:email",
+        client_id
+    );
+    Ok(Json(serde_json::json!({ "url": url })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct GitHubCallbackQuery {
+    pub code: String,
+}
+
+/// GitHub user info from their API.
+#[derive(serde::Deserialize)]
+struct GitHubUser {
+    id: i64,
+    login: String,
+    name: Option<String>,
+    avatar_url: Option<String>,
+}
+
+/// GET /api/auth/github/callback?code=... — exchange the code for a token,
+/// fetch user info, find-or-create a local user, issue a JWT, and redirect
+/// the browser back to the app with the token in the URL fragment.
+pub async fn github_callback(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<GitHubCallbackQuery>,
+) -> Result<axum::response::Redirect, (StatusCode, String)> {
+    let client_id = std::env::var("GITHUB_CLIENT_ID")
+        .map_err(|_| (StatusCode::NOT_IMPLEMENTED, "GitHub OAuth not configured".to_string()))?;
+    let client_secret = std::env::var("GITHUB_CLIENT_SECRET")
+        .map_err(|_| (StatusCode::NOT_IMPLEMENTED, "GitHub OAuth not configured".to_string()))?;
+
+    // Exchange the authorization code for an access token.
+    let http = reqwest::Client::new();
+    let token_res = http
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": params.code,
+        }))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("GitHub token exchange failed: {}", e)))?;
+
+    #[derive(serde::Deserialize)]
+    struct TokenResponse {
+        access_token: Option<String>,
+        error_description: Option<String>,
+    }
+
+    let token_body: TokenResponse = token_res
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("GitHub token parse failed: {}", e)))?;
+
+    let access_token = token_body.access_token.ok_or_else(|| {
+        let desc = token_body.error_description.unwrap_or_else(|| "unknown error".to_string());
+        (StatusCode::BAD_REQUEST, format!("GitHub auth failed: {}", desc))
+    })?;
+
+    // Fetch the authenticated GitHub user's profile.
+    let user_res = http
+        .get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("User-Agent", "LingxiBI")
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("GitHub user fetch failed: {}", e)))?;
+
+    let gh_user: GitHubUser = user_res
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("GitHub user parse failed: {}", e)))?;
+
+    // Find or create the local user by github_id.
+    let existing: Option<(i32, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, username, display_name, role FROM users WHERE github_id = ?",
+    )
+    .bind(gh_user.id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(internal)?;
+
+    let (user_id, username, role) = if let Some((id, uname, _display, role)) = existing {
+        (id, uname, role.unwrap_or_else(|| "member".to_string()))
+    } else {
+        // New user — if no users exist yet, make them admin; otherwise member.
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.db)
+            .await
+            .map_err(internal)?;
+        let new_role = if count.0 == 0 { "admin" } else { "member" };
+
+        // Use github login as username; append suffix if collision.
+        let base_username = gh_user.login.clone();
+        let mut final_username = base_username.clone();
+        let mut attempt = 0;
+        loop {
+            let dup: Option<(i32,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+                .bind(&final_username)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(internal)?;
+            if dup.is_none() {
+                break;
+            }
+            attempt += 1;
+            final_username = format!("{}_{}", base_username, attempt);
+        }
+
+        let display = gh_user.name.unwrap_or_else(|| gh_user.login.clone());
+        // No password hash for OAuth users (can't login via password).
+        let result = sqlx::query(
+            "INSERT INTO users (username, password_hash, display_name, role, github_id) VALUES (?, '', ?, ?, ?)",
+        )
+        .bind(&final_username)
+        .bind(&display)
+        .bind(new_role)
+        .bind(gh_user.id)
+        .execute(&state.db)
+        .await
+        .map_err(internal)?;
+
+        (result.last_insert_id() as i32, final_username, new_role.to_string())
+    };
+
+    // Issue JWT (same as normal login).
+    let secret = jwt_secret();
+    let claims = serde_json::json!({
+        "sub": user_id,
+        "username": username,
+        "role": role,
+        "exp": chrono::Utc::now().timestamp() + 86400 * 7,
+    });
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(internal)?;
+
+    // Redirect back to the SPA with the token in a query param so the frontend
+    // can pick it up and store it. Using a fragment (#) would be more secure but
+    // the SPA router may eat it; a short-lived query param is acceptable here
+    // because the JWT is session-scoped and the URL is on the user's own browser.
+    Ok(axum::response::Redirect::temporary(&format!(
+        "/?github_token={}&user_id={}&username={}&role={}",
+        urlencoding::encode(&token),
+        user_id,
+        urlencoding::encode(&username),
+        urlencoding::encode(&role),
+    )))
+}
+
+/// GET /api/auth/github/enabled — quick check for the frontend to show/hide the button.
+pub async fn github_enabled() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "enabled": github_oauth_enabled() }))
 }

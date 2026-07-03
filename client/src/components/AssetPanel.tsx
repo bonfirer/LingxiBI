@@ -87,7 +87,6 @@ function DataSourcesKGPanel({ t, navigate }: { t: (k: string) => string; navigat
   const [schemas, setSchemas] = useState<Record<number, SchemaInfo>>({});
   const [loadingSchema, setLoadingSchema] = useState<number | null>(null);
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
-  const [, setShowForm] = useState(false);
 
   useEffect(() => { datasourcesApi.list().then(setSources).catch(() => {}); }, [setSources]);
 
@@ -121,7 +120,7 @@ function DataSourcesKGPanel({ t, navigate }: { t: (k: string) => string; navigat
         </span>
         {isAdmin() && (
           <button
-            onClick={() => { navigate('/datasources'); setShowForm(true); }}
+            onClick={() => { navigate('/datasources?new=1'); }}
             className="text-amber-500 hover:text-amber-400 transition-premium"
             title={t('datasources.newSource')}
           >
@@ -843,6 +842,11 @@ function MetricsPanel({ t, navigate }: { t: (k: string) => string; navigate: (p:
               >
                 <Star size={9} className={activeMetricId === m.id ? 'text-amber-500 flex-shrink-0' : 'text-amber-500/60 flex-shrink-0'} weight="fill" />
                 {renderEditableText(`metric-${m.id}`, m.name, `text-[10px] flex-1 ${activeMetricId === m.id ? 'text-amber-500' : 'text-gray-400'}`)}
+                {m.created_at && (
+                  <span className="text-[8px] text-gray-600 flex-shrink-0" title={new Date(m.created_at).toLocaleString()}>
+                    {new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -878,7 +882,11 @@ function MetricsPanel({ t, navigate }: { t: (k: string) => string; navigate: (p:
             >
               <Star size={9} className={activeMetricId === m.id ? 'text-amber-500 flex-shrink-0' : 'text-amber-500/60 flex-shrink-0'} weight="fill" />
               {renderEditableText(`metric-${m.id}`, m.name, `text-[10px] flex-1 ${activeMetricId === m.id ? 'text-amber-500' : 'text-gray-400'}`)}
-            </div>
+              {m.created_at && (
+                <span className="text-[8px] text-gray-600 flex-shrink-0" title={new Date(m.created_at).toLocaleString()}>
+                  {new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                </span>
+              )}            </div>
           ))}
         </div>
       )}

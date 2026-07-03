@@ -937,6 +937,13 @@ export default function DataSourcesPage() {
   const [form, setForm] = useState<CreateDataSourcePayload>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
 
+  // Open the new-source form when navigated with ?new=1 (from sidebar "+" button)
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      setShowForm(true);
+    }
+  }, [searchParams]);
+
   // Selected datasource
   const dsIdParam = searchParams.get('ds');
   const selectedDsId = dsIdParam ? parseInt(dsIdParam) : null;
@@ -989,13 +996,15 @@ export default function DataSourcesPage() {
 
   // Default to the first datasource when none is selected (or the selected one
   // no longer exists), so the page isn't empty on first open.
+  // Skip auto-select when the user is opening the new-source form (?new=1).
   useEffect(() => {
     if (sources.length === 0) return;
+    if (searchParams.get('new') === '1') return;
     const valid = selectedDsId != null && sources.some((s) => s.id === selectedDsId);
     if (!valid) {
       navigate(`/datasources?ds=${sources[0].id}`, { replace: true });
     }
-  }, [sources, selectedDsId, navigate]);
+  }, [sources, selectedDsId, navigate, searchParams]);
 
   // Listen for SQL favorite load events
   useEffect(() => {
@@ -1035,6 +1044,7 @@ export default function DataSourcesPage() {
       setShowForm(false);
       setForm(EMPTY_FORM);
       await fetchSources();
+      navigate('/datasources', { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : t('errors.createFailed'));
     } finally {
@@ -1154,7 +1164,7 @@ export default function DataSourcesPage() {
             setForm={setForm}
             submitting={submitting}
             onSubmit={handleSubmit}
-            onCancel={() => setShowForm(false)}
+            onCancel={() => { setShowForm(false); navigate('/datasources', { replace: true }); }}
           />
         ) : (
           <EmptyState

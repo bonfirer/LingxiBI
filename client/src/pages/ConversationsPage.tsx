@@ -430,7 +430,12 @@ export default function ConversationsPage() {
                 {c.generation_status === 'generating' && (
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dot-breathe flex-shrink-0" title={t('conv.analyzing')} />
                 )}
-                <span className="truncate">{c.title || t('conv.titleWithId', { id: c.id })}</span>
+                <span className="truncate flex-1">{c.title || t('conv.titleWithId', { id: c.id })}</span>
+                {c.created_at && (
+                  <span className="text-[9px] text-gray-600 flex-shrink-0">
+                    {new Date(c.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  </span>
+                )}
               </button>
               <button
                 onClick={(e) => {

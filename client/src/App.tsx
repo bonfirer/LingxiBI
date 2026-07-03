@@ -33,6 +33,21 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null); // null = checking
 
   useEffect(() => {
+    // Handle GitHub OAuth redirect: pick up the token from the query string.
+    const params = new URLSearchParams(window.location.search);
+    const ghToken = params.get('github_token');
+    if (ghToken) {
+      localStorage.setItem('token', ghToken);
+      const userId = params.get('user_id');
+      const username = params.get('username') || '';
+      const role = params.get('role') || 'member';
+      localStorage.setItem('user', JSON.stringify({ id: Number(userId), username, role }));
+      // Clean the URL so the token doesn't linger in browser history.
+      window.history.replaceState({}, '', '/');
+      setAuthed(true);
+      return;
+    }
+
     const token = localStorage.getItem('token');
     if (!token) { setAuthed(false); return; }
     // Validate token and cache the current user (incl. role) for UI gating.

@@ -90,6 +90,7 @@ async fn main() {
     run_migrations(&pool, include_str!("../migrations/024_report_summaries.sql")).await;
     run_migrations(&pool, include_str!("../migrations/025_resource_ownership.sql")).await;
     run_migrations(&pool, include_str!("../migrations/026_datasource_grants.sql")).await;
+    run_migrations(&pool, include_str!("../migrations/027_github_oauth.sql")).await;
 
     let state = Arc::new(AppState {
         db: pool,
@@ -261,7 +262,11 @@ async fn main() {
         .route("/api/auth/login", post(routes::auth::login))
         .route("/api/auth/register", post(routes::auth::register))
         .route("/api/auth/me", get(routes::auth::me))
-        .route("/api/auth/check", get(routes::auth::check_setup));
+        .route("/api/auth/check", get(routes::auth::check_setup))
+        // GitHub OAuth
+        .route("/api/auth/github", get(routes::auth::github_login))
+        .route("/api/auth/github/callback", get(routes::auth::github_callback))
+        .route("/api/auth/github/enabled", get(routes::auth::github_enabled));
 
     let app = public
         .merge(protected)

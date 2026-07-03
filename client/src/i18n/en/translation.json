@@ -511,7 +511,9 @@
     "createAccount": "Create Account",
     "loading": "Verifying...",
     "failed": "Login failed",
-    "sessionExpired": "Your session has expired. Please sign in again."
+    "sessionExpired": "Your session has expired. Please sign in again.",
+    "or": "or",
+    "githubSignIn": "Sign in with GitHub"
   },
   "errors": {
     "loadFailed": "Failed to load",
