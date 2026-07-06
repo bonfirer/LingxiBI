@@ -115,7 +115,7 @@ The user's message contains their specific request for this dashboard (what to s
 4. Apply a refined, high-end "executive dashboard" design system — not a generic template. Aim for the polish of a premium analytics product (think Linear / Vercel / Stripe dashboards).
 
    TYPOGRAPHY
-   - Load Inter via Google Fonts: <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"> (server proxies through a fast China mirror).
+   - Load Inter via Google Fonts: <link href="https://fonts.loli.net/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"> (server proxies through a fast China mirror).
    - Type scale: card/section labels 11px UPPERCASE letter-spacing:0.08em in the dim text color; body 13px; card titles 14px weight 600; KPI values 32-48px weight 600 letter-spacing:-0.02em line-height:1.05.
    - ALL numeric text uses font-variant-numeric:tabular-nums so digits align. Format big numbers with thousands separators and compact units where natural (1.2M, 84.3%).
 
