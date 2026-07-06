@@ -217,6 +217,12 @@ async fn main() {
         .route("/api/ai-examples/datasource/{ds_id}", get(routes::ai_examples::list_by_datasource))
         // Achievements
         .route("/api/achievements", get(routes::achievements::list))
+        // Feature wishes (feedback / feature requests)
+        .route("/api/wishes", get(routes::wishes::list))
+        .route("/api/wishes", post(routes::wishes::create))
+        .route("/api/wishes/{id}", put(routes::wishes::update))
+        .route("/api/wishes/{id}", delete(routes::wishes::delete))
+        .route("/api/wishes/summary", get(routes::wishes::summary))
         // Short-lived, read-only token for embedding reports in iframes.
         .route("/api/embed-token", get(routes::auth::embed_token))
         // Admin-only user management (each handler re-checks admin role).
@@ -391,6 +397,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("030_default_datasource", include_str!("../migrations/030_default_datasource.sql")),
     ("031_metric_params", include_str!("../migrations/031_metric_params.sql")),
     ("032_data_pool_params", include_str!("../migrations/032_data_pool_params.sql")),
+    ("033_wishes", include_str!("../migrations/033_wishes.sql")),
 ];
 
 /// Whether a migration error means "this object was already applied" (safe to

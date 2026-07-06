@@ -8,6 +8,7 @@
     "snapshots": "Snapshots",
     "alerts": "Email Alerts",
     "logs": "AI Logs",
+    "wishes": "Wishes",
     "settings": "Settings",
     "logout": "Sign Out",
     "starOnGithub": "Star on GitHub ⭐",
@@ -619,6 +620,34 @@
     "deleteConfirm": {
       "title": "Confirm Delete",
       "message": "Are you sure you want to delete this schedule? All associated snapshot data will also be removed."
+    }
+  },
+  "wishes": {
+    "title": "Wish Pool",
+    "description": "Submit new ideas, feature requests, or improvement suggestions",
+    "newWish": "Make a wish",
+    "titlePlaceholder": "Briefly describe your idea...",
+    "contentPlaceholder": "Describe the background, use case, and expected outcome...",
+    "submit": "Submit wish",
+    "category": {
+      "feature": "Feature",
+      "bug": "Bug Fix",
+      "improvement": "Improvement",
+      "other": "Other"
+    },
+    "status": {
+      "pending": "Pending",
+      "accepted": "Accepted",
+      "rejected": "Declined",
+      "done": "Done"
+    },
+    "empty": {
+      "title": "No wishes yet",
+      "description": "Write your first idea or request above and we'll review it carefully."
+    },
+    "deleteConfirm": {
+      "title": "Delete wish",
+      "message": "Are you sure you want to delete this wish? This action cannot be undone."
     }
   },
   "alerts": {

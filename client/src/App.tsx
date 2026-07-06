@@ -18,6 +18,7 @@ const MetricsPage = lazy(() => import('./pages/MetricsPage'));
 const SnapshotsPage = lazy(() => import('./pages/SnapshotsPage'));
 const AlertsPage = lazy(() => import('./pages/AlertsPage'));
 const LogsPage = lazy(() => import('./pages/LogsPage'));
+const WishesPage = lazy(() => import('./pages/WishesPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const SharedReportPage = lazy(() => import('./pages/SharedReportPage'));
 
@@ -106,6 +107,7 @@ export default function App() {
               <Route path="/snapshots" element={<SnapshotsPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/logs" element={<LogsPage />} />
+              <Route path="/wishes" element={<WishesPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           )}

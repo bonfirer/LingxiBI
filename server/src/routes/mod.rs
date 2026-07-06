@@ -18,6 +18,7 @@ pub mod achievements;
 pub mod snapshots;
 pub mod alerts;
 pub mod table_descriptions;
+pub mod wishes;
 
 use axum::http::StatusCode;
 use crate::routes::auth::AuthUser;

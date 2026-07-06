@@ -8,6 +8,7 @@
     "snapshots": "数据快照",
     "alerts": "邮件预警",
     "logs": "AI 日志",
+    "wishes": "许愿",
     "settings": "设置",
     "logout": "退出登录",
     "starOnGithub": "在 GitHub 点赞 ⭐",
@@ -619,6 +620,34 @@
     "deleteConfirm": {
       "title": "确认删除",
       "message": "确定要删除该快照计划？相关的所有快照数据也将被清除。"
+    }
+  },
+  "wishes": {
+    "title": "许愿池",
+    "description": "提交新想法、功能需求或改进建议",
+    "newWish": "许下新愿望",
+    "titlePlaceholder": "简短描述你的想法...",
+    "contentPlaceholder": "详细说明需求背景、使用场景和期望效果...",
+    "submit": "提交愿望",
+    "category": {
+      "feature": "新功能",
+      "bug": "缺陷修复",
+      "improvement": "体验优化",
+      "other": "其他"
+    },
+    "status": {
+      "pending": "待处理",
+      "accepted": "已采纳",
+      "rejected": "已拒绝",
+      "done": "已完成"
+    },
+    "empty": {
+      "title": "还没有愿望",
+      "description": "在上方写下你的第一个想法或需求，我们会认真评估。"
+    },
+    "deleteConfirm": {
+      "title": "确认删除愿望",
+      "message": "确定要删除这条愿望吗？此操作不可撤销。"
     }
   },
   "alerts": {

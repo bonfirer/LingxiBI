@@ -505,3 +505,29 @@ export interface GenerateAlertTemplatePayload {
   instructions?: string;
   lang?: string;
 }
+
+// ── Feature Wishes ──
+
+export interface Wish {
+  id: number;
+  user_id: number;
+  title: string;
+  content: string;
+  category: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'done' | string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateWishPayload {
+  title: string;
+  content: string;
+  category?: string;
+}
+
+export interface UpdateWishPayload {
+  title?: string;
+  content?: string;
+  category?: string;
+  status?: string;
+}

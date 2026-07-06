@@ -846,3 +846,33 @@ pub struct AlertTemplate {
     pub subject_template: String,
     pub body_template: String,
 }
+
+// ── Feature Wishes ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Wish {
+    pub id: i32,
+    pub user_id: i32,
+    pub title: String,
+    pub content: String,
+    pub category: String,
+    pub status: String,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateWish {
+    pub title: String,
+    pub content: String,
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateWish {
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub category: Option<String>,
+    pub status: Option<String>,
+}
+

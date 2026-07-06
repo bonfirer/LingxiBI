@@ -12,9 +12,10 @@ export default function Layout() {
   const isSettingsPage = location.pathname.startsWith('/settings');
   const isSnapshotsPage = location.pathname.startsWith('/snapshots');
   const isAlertsPage = location.pathname.startsWith('/alerts');
-  const hideAssetPanel = isConversationsPage || isReportDetail || isLogsPage || isSettingsPage || isSnapshotsPage || isAlertsPage;
-  // Hide the AI assistant on conversation, report detail, report list, logs, settings, snapshots, and alerts pages
-  const hideAIPanel = isConversationsPage || isReportDetail || isReportsPage || isLogsPage || isSettingsPage || isSnapshotsPage || isAlertsPage;
+  const isWishesPage = location.pathname.startsWith('/wishes');
+  const hideAssetPanel = isConversationsPage || isReportDetail || isLogsPage || isSettingsPage || isSnapshotsPage || isAlertsPage || isWishesPage;
+  // Hide the AI assistant on conversation, report detail, report list, logs, settings, snapshots, alerts, and wishes pages
+  const hideAIPanel = isConversationsPage || isReportDetail || isReportsPage || isLogsPage || isSettingsPage || isSnapshotsPage || isAlertsPage || isWishesPage;
 
   return (
     <div className="flex h-dvh w-full overflow-hidden grain-overlay">

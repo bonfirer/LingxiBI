@@ -43,6 +43,9 @@ import type {
   AlertLog,
   AlertTemplate,
   GenerateAlertTemplatePayload,
+  Wish,
+  CreateWishPayload,
+  UpdateWishPayload,
 } from './types';
 
 // Re-export all types from the shared types module
@@ -95,6 +98,9 @@ export type {
   AlertLog,
   AlertTemplate,
   GenerateAlertTemplatePayload,
+  Wish,
+  CreateWishPayload,
+  UpdateWishPayload,
 } from './types';
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -558,4 +564,17 @@ export const usersApi = {
     request<User>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   delete: (id: number) =>
     request<void>(`/users/${id}`, { method: 'DELETE' }),
+};
+
+// ── Feature Wishes ──
+
+export const wishesApi = {
+  list: () => request<Wish[]>('/wishes'),
+  create: (payload: CreateWishPayload) =>
+    request<Wish>('/wishes', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id: number, payload: UpdateWishPayload) =>
+    request<Wish>(`/wishes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  delete: (id: number) =>
+    request<void>(`/wishes/${id}`, { method: 'DELETE' }),
+  summary: () => request<{ total: number; by_status: Record<string, number> }>('/wishes/summary'),
 };

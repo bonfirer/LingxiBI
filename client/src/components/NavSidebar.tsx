@@ -14,6 +14,7 @@ import {
   SignOut,
   Camera,
   Bell,
+  Sparkle,
   GithubLogo,
 } from '@phosphor-icons/react';
 import { useUIStore } from '../stores/uiStore';
@@ -26,6 +27,7 @@ const navKeys = [
   { to: '/snapshots', icon: Camera, tKey: 'nav.snapshots' },
   { to: '/alerts', icon: Bell, tKey: 'nav.alerts' },
   { to: '/logs', icon: ClockCounterClockwise, tKey: 'nav.logs' },
+  { to: '/wishes', icon: Sparkle, tKey: 'nav.wishes' },
 ];
 
 export default function NavSidebar() {
