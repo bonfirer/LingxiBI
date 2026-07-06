@@ -468,6 +468,15 @@ export default function ReportDetailPage() {
           </div>
         )}
         <div className="flex items-center gap-1.5 flex-1 justify-end">
+          {/* Manual refresh */}
+          <button
+            onClick={() => { if (iframeRef.current && id) iframeRef.current.src = withToken(`/api/reports/${id}/html?t=${Date.now()}`); }}
+            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2 py-1.5 rounded-md transition-premium"
+            title={t('common.refresh')}
+            aria-label={t('common.refresh')}
+          >
+            <ArrowClockwise size={11} />
+          </button>
           <button onClick={() => setShowDsModal(true)} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
             <Database size={11} /> {t('reportDetail.dataSources')} ({datasources.length})
           </button>
@@ -486,15 +495,6 @@ export default function ReportDetailPage() {
           </button>
           {/* Refresh interval */}
           <RefreshIntervalPicker value={refreshInterval} onChange={(v) => { setRefreshInterval(v); if (report) reportsApi.updateRefreshInterval(report.id, v).catch(() => {}); }} t={t} />
-          {/* Manual refresh */}
-          <button
-            onClick={() => { if (iframeRef.current && id) iframeRef.current.src = withToken(`/api/reports/${id}/html?t=${Date.now()}`); }}
-            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2 py-1.5 rounded-md transition-premium"
-            title={t('common.refresh')}
-            aria-label={t('common.refresh')}
-          >
-            <ArrowClockwise size={11} />
-          </button>
           {/* Debug SQL toggle */}
           <button
             onClick={() => setShowDebug((v) => !v)}
@@ -517,12 +517,7 @@ export default function ReportDetailPage() {
               <ArrowCounterClockwise size={11} /> {t('reportDetail.rollback')}
             </button>
           )}
-          {/* Version indicator */}
-          {report.html_content && report.published_html && report.html_content !== report.published_html && (
-            <span className="text-[9px] text-amber-500/60 px-1.5 py-0.5 bg-amber-500/5 border border-amber-500/10 rounded">
-              {t('reportDetail.unsaved')}
-            </span>
-          )}
+
           <button onClick={handleShare} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
             <ShareNetwork size={11} /> {t('reportDetail.share')}
           </button>
