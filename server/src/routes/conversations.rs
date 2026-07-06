@@ -15,7 +15,7 @@ pub async fn list(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<Conversation>>, (StatusCode, String)> {
     let convs = sqlx::query_as::<_, Conversation>(
-        "SELECT * FROM conversations WHERE (owner_user_id = ? OR ? = 1) ORDER BY updated_at DESC",
+        "SELECT * FROM conversations WHERE (owner_user_id = ? OR ? = 1) ORDER BY created_at DESC",
     )
     .bind(user.id)
     .bind(user.is_admin as i32)
