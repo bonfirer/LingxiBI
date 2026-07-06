@@ -86,7 +86,7 @@ export default function NavSidebar() {
 
       {/* Star on GitHub */}
       <a
-        href="https://github.com/bonfirer/ai-report"
+        href="https://github.com/bonfirer/LingxiBI"
         target="_blank"
         rel="noreferrer"
         title={t('nav.starOnGithub')}
