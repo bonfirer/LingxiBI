@@ -13,6 +13,9 @@ pub struct DataSource {
     #[serde(skip_serializing)]
     pub password: String,
     pub status: String,
+    /// Whether this is the single locked default datasource. At most one row is
+    /// true at a time (enforced by the API).
+    pub is_default: Option<bool>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -121,6 +124,9 @@ pub struct DataPool {
     pub datasource_id: i32,
     pub result_cache: Option<serde_json::Value>,
     pub row_count: Option<i32>,
+    /// Parameter definitions when the pool's SQL uses `{{name}}` / `[[ ]]`
+    /// placeholders (JSON array of `MetricParam`). Carried into a saved metric.
+    pub params: Option<serde_json::Value>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -144,9 +150,72 @@ pub struct Report {
     pub generation_error: Option<String>,
     pub style_key: Option<String>,
     pub design_score: Option<serde_json::Value>,
+    /// Report-level global filter controls, stored as a JSON array of
+    /// `ReportFilter`. NULL/empty => no global filtering.
+    pub report_filters: Option<serde_json::Value>,
     pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// One report-level filter control. Its `value` is applied to every `target`
+/// (dataset + column) whose dataset appears in the report. A blank value means
+/// the control is inactive and contributes no condition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportFilter {
+    /// Stable key for the control (used by the UI).
+    pub key: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Operator: =, !=, <>, >, >=, <, <=, LIKE, IN, BETWEEN.
+    pub op: String,
+    /// Current selected value. Scalar for most ops; array for IN / BETWEEN.
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub targets: Vec<ReportFilterTarget>,
+}
+
+/// Where a report-level filter is applied: a dataset column.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportFilterTarget {
+    pub datasource_id: i32,
+    pub column: String,
+}
+
+/// Request body to set a report's global filter controls.
+#[derive(Debug, Deserialize)]
+pub struct SetReportFilters {
+    #[serde(default)]
+    pub filters: Vec<ReportFilter>,
+}
+
+/// One entry in a report's SQL debug trace: the actual query executed for a
+/// dataset, its bound parameters, and the result/timing. Only produced when the
+/// debug panel is explicitly opened.
+#[derive(Debug, Serialize)]
+pub struct ReportDebugEntry {
+    /// report_datasources.id
+    pub dataset_id: i32,
+    pub name: String,
+    /// Underlying datasource id + engine.
+    pub datasource_id: i32,
+    pub db_type: String,
+    /// The metric's stored SQL, before filters.
+    pub base_sql: String,
+    /// The SQL actually executed (base, or wrapped with a WHERE when filters
+    /// are active).
+    pub effective_sql: String,
+    /// Bound parameter values, in order, for the effective SQL.
+    pub params: Vec<serde_json::Value>,
+    /// Number of active filter conditions (dataset + report-level combined).
+    pub filter_count: usize,
+    pub row_count: Option<usize>,
+    pub duration_ms: u64,
+    /// When this query was executed (UTC, RFC3339). This is the debug-time run,
+    /// not a historical log entry.
+    pub executed_at: chrono::DateTime<chrono::Utc>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +256,13 @@ pub struct UpdateLLMConfig {
 pub struct QueryRequest {
     pub sql: String,
     pub datasource_id: i32,
+    /// Optional parameter definitions (JSON array of `MetricParam`) — their
+    /// defaults resolve `{{name}}` / `[[ ]]` placeholders when running the SQL.
+    #[serde(default)]
+    pub params: Option<serde_json::Value>,
+    /// Optional explicit parameter values (name -> value), overriding defaults.
+    #[serde(default)]
+    pub param_values: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -359,9 +435,29 @@ pub struct MetricPool {
     pub result_cache: Option<serde_json::Value>,
     pub row_count: Option<i32>,
     pub source_pool_id: Option<i32>,
+    /// Declared parameters (JSON array of `MetricParam`). NULL/empty => the
+    /// metric SQL has no placeholders and runs unchanged.
+    pub params: Option<serde_json::Value>,
     pub owner_user_id: Option<i32>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// A declared metric parameter. Its `name` matches the `{{name}}` placeholders
+/// in the metric SQL; `default` (if set) is used when no runtime value is given.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricParam {
+    pub name: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// UI hint: "text" | "number" | "date" | "daterange" | "enum". Optional.
+    #[serde(default, rename = "type")]
+    pub param_type: Option<String>,
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+    /// Allowed values for enum-type parameters.
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -372,6 +468,8 @@ pub struct CreateMetricPool {
     pub datasource_id: i32,
     pub group_id: Option<i32>,
     pub source_pool_id: Option<i32>,
+    #[serde(default)]
+    pub params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -380,6 +478,8 @@ pub struct UpdateMetricPool {
     pub description: Option<String>,
     pub sql_query: Option<String>,
     pub group_id: Option<i32>,
+    #[serde(default)]
+    pub params: Option<serde_json::Value>,
 }
 
 /// Request to move a report to a different group.
@@ -401,6 +501,9 @@ pub struct ReportDataSource {
     pub datasource_id: i32,
     pub result_cache: Option<serde_json::Value>,
     pub row_count: Option<i32>,
+    /// Optional runtime query conditions, stored as a JSON array of
+    /// `FilterCondition`. NULL/empty => the metric SQL runs unchanged.
+    pub filters: Option<serde_json::Value>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -410,6 +513,26 @@ pub struct CreateReportDataSource {
     pub name: String,
     pub sql_query: String,
     pub datasource_id: i32,
+}
+
+/// A single runtime query condition applied to a report dataset. Conditions are
+/// applied by wrapping the metric SQL as a subquery and adding a `WHERE` clause;
+/// values are always passed as bound parameters (never string-interpolated).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterCondition {
+    /// Column from the metric's output to filter on (validated as an identifier).
+    pub column: String,
+    /// Operator: =, !=, <>, >, >=, <, <=, LIKE, IN, BETWEEN.
+    pub op: String,
+    /// Bound value. Scalar for most ops; array for IN and [min, max] for BETWEEN.
+    pub value: serde_json::Value,
+}
+
+/// Request body to set the runtime filters on a report dataset.
+#[derive(Debug, Deserialize)]
+pub struct SetReportDataSourceFilters {
+    #[serde(default)]
+    pub filters: Vec<FilterCondition>,
 }
 
 /// Canvas layout item — position and size in a 12-column grid.

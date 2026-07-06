@@ -16,6 +16,7 @@ use tower_http::{
 };
 use tracing_subscriber;
 
+mod crypto;
 mod db_pool;
 mod llm;
 mod models;
@@ -62,35 +63,14 @@ async fn main() {
         .await
         .expect("Failed to connect to metadata database");
 
-    // Run migrations — each statement separated by semicolons, with statement
-    // delimiter support. Handles semicolons inside string values correctly.
-    run_migrations(&pool, include_str!("../migrations/001_init.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/002_groups_and_metrics.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/003_report_canvas.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/004_report_html.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/005_refresh_interval.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/006_knowledge_base.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/007_generation_status.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/008_published_html.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/009_users.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/010_ai_logs.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/011_ai_examples.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/012_ai_logs_params.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/013_report_style.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/014_report_score_and_achievements.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/015_report_versions.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/016_metric_snapshots.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/017_column_profiling.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/018_table_descriptions.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/019_column_descriptions.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/020_conversation_generation_status.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/021_email_alerts.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/022_feishu_alerts.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/023_report_themes.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/024_report_summaries.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/025_resource_ownership.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/026_datasource_grants.sql")).await;
-    run_migrations(&pool, include_str!("../migrations/027_github_oauth.sql")).await;
+    // Run schema migrations, tracked in `schema_migrations` so each runs exactly
+    // once and genuine failures abort startup (see `run_migrations`).
+    run_migrations(&pool, MIGRATIONS).await;
+
+    // Encrypt-at-rest: transparently upgrade any legacy plaintext credentials
+    // (datasource passwords, LLM key, SMTP password, Feishu secret) to
+    // AES-256-GCM ciphertext. Safe to run on every startup.
+    crypto::encrypt_existing_secrets(&pool).await;
 
     let state = Arc::new(AppState {
         db: pool,
@@ -128,6 +108,7 @@ async fn main() {
         .route("/api/datasources/{id}/profile", post(routes::datasources::profile))
         .route("/api/datasources/{id}/grants", get(routes::datasources::list_grants))
         .route("/api/datasources/{id}/grants", put(routes::datasources::set_grants))
+        .route("/api/datasources/{id}/default", put(routes::datasources::set_default))
         .route("/api/datasources/{id}/table-descriptions", get(routes::table_descriptions::list))
         .route("/api/datasources/{id}/table-descriptions", post(routes::table_descriptions::upsert))
         .route("/api/datasources/{id}/column-descriptions", get(routes::table_descriptions::list_columns))
@@ -158,6 +139,10 @@ async fn main() {
         .route("/api/reports/{id}/datasources", post(routes::report_datasources::create))
         .route("/api/reports/{id}/datasources/{ds_id}", delete(routes::report_datasources::remove))
         .route("/api/reports/{id}/datasources/{ds_id}/refresh", post(routes::report_datasources::refresh))
+        .route("/api/reports/{id}/datasources/{ds_id}/filters", put(routes::report_datasources::set_filters))
+        .route("/api/reports/{id}/datasources/{ds_id}/ai-filters", post(routes::report_datasources::ai_filters))
+        .route("/api/reports/{id}/filters", put(routes::reports::set_report_filters))
+        .route("/api/reports/{id}/debug", get(routes::reports::debug_sql))
         .route("/api/reports/{id}/refresh-interval", put(routes::reports::update_refresh_interval))
         .route("/api/reports/{id}/style", put(routes::reports::update_style))
         .route("/api/reports/{id}/versions", get(routes::reports::list_versions))
@@ -177,6 +162,8 @@ async fn main() {
         .route("/api/metric-groups/{id}", delete(routes::metric_groups::remove))
         .route("/api/metrics", get(routes::metric_pools::list))
         .route("/api/metrics", post(routes::metric_pools::create))
+        .route("/api/metrics/ai-parameterize", post(routes::metric_pools::ai_parameterize))
+        .route("/api/metrics/ai-generate", post(routes::metric_pools::ai_generate))
         .route("/api/metrics/{id}", get(routes::metric_pools::get_one))
         .route("/api/metrics/{id}", put(routes::metric_pools::update))
         .route("/api/metrics/{id}", delete(routes::metric_pools::remove))
@@ -368,56 +355,143 @@ async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     status
 }
 
-/// Run SQL migrations, splitting on semicolons while respecting
-/// single-quoted strings (basic protection against false splits).
-async fn run_migrations(pool: &MySqlPool, migration_sql: &str) {
-    for statement in split_sql_statements(migration_sql) {
-        let trimmed = statement.trim();
-        if trimmed.is_empty() {
+/// Ordered manifest of schema migrations: `(version, sql)`. The version is the
+/// file stem and is recorded in `schema_migrations` once applied. Append new
+/// migrations to the end — never reorder or rewrite an applied one.
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("001_init", include_str!("../migrations/001_init.sql")),
+    ("002_groups_and_metrics", include_str!("../migrations/002_groups_and_metrics.sql")),
+    ("003_report_canvas", include_str!("../migrations/003_report_canvas.sql")),
+    ("004_report_html", include_str!("../migrations/004_report_html.sql")),
+    ("005_refresh_interval", include_str!("../migrations/005_refresh_interval.sql")),
+    ("006_knowledge_base", include_str!("../migrations/006_knowledge_base.sql")),
+    ("007_generation_status", include_str!("../migrations/007_generation_status.sql")),
+    ("008_published_html", include_str!("../migrations/008_published_html.sql")),
+    ("009_users", include_str!("../migrations/009_users.sql")),
+    ("010_ai_logs", include_str!("../migrations/010_ai_logs.sql")),
+    ("011_ai_examples", include_str!("../migrations/011_ai_examples.sql")),
+    ("012_ai_logs_params", include_str!("../migrations/012_ai_logs_params.sql")),
+    ("013_report_style", include_str!("../migrations/013_report_style.sql")),
+    ("014_report_score_and_achievements", include_str!("../migrations/014_report_score_and_achievements.sql")),
+    ("015_report_versions", include_str!("../migrations/015_report_versions.sql")),
+    ("016_metric_snapshots", include_str!("../migrations/016_metric_snapshots.sql")),
+    ("017_column_profiling", include_str!("../migrations/017_column_profiling.sql")),
+    ("018_table_descriptions", include_str!("../migrations/018_table_descriptions.sql")),
+    ("019_column_descriptions", include_str!("../migrations/019_column_descriptions.sql")),
+    ("020_conversation_generation_status", include_str!("../migrations/020_conversation_generation_status.sql")),
+    ("021_email_alerts", include_str!("../migrations/021_email_alerts.sql")),
+    ("022_feishu_alerts", include_str!("../migrations/022_feishu_alerts.sql")),
+    ("023_report_themes", include_str!("../migrations/023_report_themes.sql")),
+    ("024_report_summaries", include_str!("../migrations/024_report_summaries.sql")),
+    ("025_resource_ownership", include_str!("../migrations/025_resource_ownership.sql")),
+    ("026_datasource_grants", include_str!("../migrations/026_datasource_grants.sql")),
+    ("027_github_oauth", include_str!("../migrations/027_github_oauth.sql")),
+    ("028_report_datasource_filters", include_str!("../migrations/028_report_datasource_filters.sql")),
+    ("029_report_filters", include_str!("../migrations/029_report_filters.sql")),
+    ("030_default_datasource", include_str!("../migrations/030_default_datasource.sql")),
+    ("031_metric_params", include_str!("../migrations/031_metric_params.sql")),
+    ("032_data_pool_params", include_str!("../migrations/032_data_pool_params.sql")),
+];
+
+/// Whether a migration error means "this object was already applied" (safe to
+/// tolerate when baselining an existing database on first upgrade) rather than
+/// a genuine failure.
+///
+/// Matches primarily on the MySQL native error number (sqlx's `code()` returns
+/// the SQLSTATE, not the 1050/1060/... number), with a SQLSTATE fallback.
+fn is_already_applied_error(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .map(|db_err| {
+            let mysql_num = db_err
+                .as_error()
+                .downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+                .map(|me| me.number());
+            // 1050 table exists, 1060 dup column, 1061 dup key name, 1062 dup
+            // entry (seed data), 1068 multiple PK, 1091 can't DROP (object
+            // missing), 1826 dup FK.
+            matches!(mysql_num, Some(1050 | 1060 | 1061 | 1062 | 1068 | 1091 | 1826))
+                // SQLSTATE fallback: 42S01 table exists, 42S21 dup column,
+                // 23000 integrity/dup-entry.
+                || matches!(db_err.code().unwrap_or_default().as_ref(), "42S01" | "42S21" | "23000")
+        })
+        .unwrap_or(false)
+}
+
+/// Apply the ordered migration manifest with version tracking.
+///
+/// - A `schema_migrations` table records which versions have run, so each
+///   migration is applied exactly once and startup is fast on subsequent boots.
+/// - A MySQL named lock serializes migrations across multiple instances.
+/// - Existing pre-tracking databases are baselined on first upgrade: statements
+///   that fail with an "already applied" error (table/column exists, etc.) are
+///   tolerated, but any *other* error aborts startup instead of being silently
+///   swallowed — a broken schema should never be served.
+async fn run_migrations(pool: &MySqlPool, migrations: &[(&str, &str)]) {
+    // Serialize concurrent instances so two servers can't race the same DDL.
+    let lock: (Option<i32>,) = sqlx::query_as("SELECT GET_LOCK('lingxibi_migrations', 60)")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to acquire migration lock");
+    if lock.0 != Some(1) {
+        panic!("Timed out waiting for the migration lock; another instance may be stuck");
+    }
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version VARCHAR(255) NOT NULL PRIMARY KEY,
+            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await
+    .expect("Failed to create schema_migrations table");
+
+    for (version, sql) in migrations {
+        let applied: Option<(String,)> =
+            sqlx::query_as("SELECT version FROM schema_migrations WHERE version = ?")
+                .bind(version)
+                .fetch_optional(pool)
+                .await
+                .expect("Failed to query schema_migrations");
+        if applied.is_some() {
             continue;
         }
-        match sqlx::query(trimmed).execute(pool).await {
-            Ok(_) => {}
-            Err(e) => {
-                // Migrations are idempotent: re-running them on an existing
-                // database makes "object already exists / already applied"
-                // statements fail. Those are expected and silently skipped.
-                //
-                // We match primarily on the MySQL native error number (sqlx's
-                // `code()` returns the SQLSTATE, not the 1050/1060/... number),
-                // with a SQLSTATE fallback for portability.
-                let ignorable = e
-                    .as_database_error()
-                    .map(|db_err| {
-                        let mysql_num = db_err
-                            .as_error()
-                            .downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
-                            .map(|me| me.number());
-                        let sqlstate = db_err.code().unwrap_or_default();
-                        // 1050 table exists, 1060 dup column, 1061 dup key name,
-                        // 1062 dup entry (seed data), 1068 multiple PK, 1091 can't
-                        // DROP (object missing), 1826 dup FK.
-                        matches!(
-                            mysql_num,
-                            Some(1050 | 1060 | 1061 | 1062 | 1068 | 1091 | 1826)
-                        )
-                        // SQLSTATE fallback: 42S01 table exists, 42S21 dup column,
-                        // 23000 integrity/dup-entry.
-                        || matches!(sqlstate.as_ref(), "42S01" | "42S21" | "23000")
-                    })
-                    .unwrap_or(false);
-                if ignorable {
+
+        for statement in split_sql_statements(sql) {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Err(e) = sqlx::query(trimmed).execute(pool).await {
+                if is_already_applied_error(&e) {
+                    // Baselining an existing DB: object already present.
                     continue;
                 }
-                tracing::warn!(
-                    "Migration statement warning [{}]: {}",
-                    &trimmed[..trimmed.len().min(80)],
-                    e
+                // Genuine failure: release the lock and abort so ops notice.
+                let _ = sqlx::query("SELECT RELEASE_LOCK('lingxibi_migrations')")
+                    .execute(pool)
+                    .await;
+                panic!(
+                    "Migration '{}' failed: {}\n  statement: {}",
+                    version,
+                    e,
+                    &trimmed[..trimmed.len().min(120)]
                 );
             }
         }
+
+        sqlx::query("INSERT IGNORE INTO schema_migrations (version) VALUES (?)")
+            .bind(version)
+            .execute(pool)
+            .await
+            .expect("Failed to record migration");
+        tracing::info!("Applied migration {}", version);
     }
-    tracing::info!("Migrations complete");
+
+    let _ = sqlx::query("SELECT RELEASE_LOCK('lingxibi_migrations')")
+        .execute(pool)
+        .await;
+    tracing::info!("Migrations complete ({} tracked)", migrations.len());
 }
 
 /// Split SQL on `;` delimiters while respecting single-quoted strings.

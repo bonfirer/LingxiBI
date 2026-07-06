@@ -13,6 +13,7 @@ export interface WSMessage {
   columns?: string[];
   row_count?: number;
   datasource_id?: number;
+  params?: unknown;
 }
 
 interface UseWebSocketOptions {

@@ -91,8 +91,10 @@ async fn execute_snapshot(state: &Arc<AppState>, schedule: &MetricSnapshotSchedu
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Datasource {} not found", metric.datasource_id))?;
 
-    // Execute the metric SQL (validated, timed out, row-capped)
-    let qr = query::execute_validated(state, &ds, &metric.sql_query).await?;
+    // Execute the metric SQL (validated, timed out, row-capped), resolving any
+    // {{param}} placeholders with the metric's default values.
+    let defaults = query::param_defaults(&metric.params);
+    let qr = query::execute_metric_sql(state, &ds, &metric.sql_query, &defaults, &[]).await?;
 
     let result_data = serde_json::to_value(&qr.rows).map_err(|e| e.to_string())?;
 

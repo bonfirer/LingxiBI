@@ -451,6 +451,10 @@ async fn handle_chat_inner(
             let sql = q.get("sql").and_then(|v| v.as_str()).unwrap_or("");
             let ds_id = q.get("datasource_id").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
             let label = q.get("label").and_then(|v| v.as_str()).unwrap_or("query");
+            // Optional parameter definitions when the AI parameterized the SQL
+            // (uses {{name}} / [[ ]] placeholders). Preview runs with defaults.
+            let params_json = q.get("params").cloned().filter(|v| v.is_array());
+            let param_defaults = query::param_defaults(&params_json);
 
             if sql.is_empty() {
                 continue;
@@ -510,17 +514,22 @@ async fn handle_chat_inner(
                     }
                 }
 
-                // Execute with shared safety guards (validation + timeout + row cap).
-                let result = query::execute_validated(state, &ds, &current_sql).await;
+                // Execute with shared safety guards (validation + timeout + row
+                // cap), resolving any {{param}} placeholders with the AI's
+                // default values so the preview runs.
+                let result =
+                    query::execute_metric_sql(state, &ds, &current_sql, &param_defaults, &[]).await;
 
                 match result {
                     Ok(qr) => {
                         let cache = serde_json::to_value(&qr.rows).ok();
                         let pool_name = label.to_string();
+                        // Store the RAW parameterized SQL (with placeholders) so a
+                        // metric saved from this pool keeps its parameters.
                         let final_sql = current_sql.clone();
 
                         let pool_result = sqlx::query(
-                            "INSERT INTO data_pools (conversation_id, name, sql_query, datasource_id, result_cache, row_count) VALUES (?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO data_pools (conversation_id, name, sql_query, datasource_id, result_cache, row_count, params) VALUES (?, ?, ?, ?, ?, ?, ?)",
                         )
                         .bind(conversation_id)
                         .bind(&pool_name)
@@ -528,6 +537,7 @@ async fn handle_chat_inner(
                         .bind(ds_id)
                         .bind(&cache)
                         .bind(qr.row_count as i32)
+                        .bind(&params_json)
                         .execute(&state.db)
                         .await;
 
@@ -545,6 +555,7 @@ async fn handle_chat_inner(
                                             "datasource_id": ds_id,
                                             "columns": qr.columns,
                                             "row_count": qr.row_count,
+                                            "params": params_json,
                                             "retries": attempt,
                                         })
                                         .to_string().into(),

@@ -119,9 +119,10 @@ pub async fn update_smtp(
     let host = payload.host.unwrap_or(base.host);
     let port = payload.port.unwrap_or(base.port);
     let username = payload.username.unwrap_or(base.username);
-    // Only overwrite the password when a non-empty value is provided.
+    // Only overwrite the password when a non-empty value is provided. Stored
+    // encrypted at rest; `encrypt` is idempotent on the existing ciphertext.
     let password = match payload.password {
-        Some(p) if !p.is_empty() => p,
+        Some(p) if !p.is_empty() => crate::crypto::encrypt(&p),
         _ => base.password,
     };
     let from_email = payload.from_email.unwrap_or(base.from_email);
@@ -223,9 +224,10 @@ pub async fn update_feishu(
     let base_enabled = existing.as_ref().map(|c| c.enabled).unwrap_or(false);
 
     let webhook_url = payload.webhook_url.unwrap_or(base_url);
-    // Only overwrite the secret when a non-empty value is provided.
+    // Only overwrite the secret when a non-empty value is provided. Stored
+    // encrypted at rest; `encrypt` is idempotent on the existing ciphertext.
     let secret = match payload.secret {
-        Some(s) if !s.is_empty() => s,
+        Some(s) if !s.is_empty() => crate::crypto::encrypt(&s),
         _ => base_secret,
     };
     let enabled = payload.enabled.unwrap_or(base_enabled);

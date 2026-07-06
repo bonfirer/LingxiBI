@@ -310,8 +310,10 @@ pub async fn take_snapshot(
         .map_err(crate::routes::internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "Data source not found".to_string()))?;
 
-    // Validate + execute with shared safety guards (timeout + row cap).
-    let qr = query::execute_validated(&state, &ds, &metric.sql_query)
+    // Validate + execute with shared safety guards (timeout + row cap),
+    // resolving any {{param}} placeholders with the metric's default values.
+    let defaults = query::param_defaults(&metric.params);
+    let qr = query::execute_metric_sql(&state, &ds, &metric.sql_query, &defaults, &[])
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 

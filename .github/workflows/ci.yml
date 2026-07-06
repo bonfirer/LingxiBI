@@ -28,9 +28,11 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
+      - name: Test
+        run: cargo test --locked
+
       - name: Clippy
         run: cargo clippy --all-targets
-        continue-on-error: true
 
       - name: Format check
         run: cargo fmt --check

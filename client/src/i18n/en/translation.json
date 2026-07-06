@@ -63,6 +63,11 @@
       "adminsNote": "Admins always have access: {{names}}",
       "noMembers": "No member accounts yet. Create members in Settings."
     },
+    "default": {
+      "badge": "Default",
+      "lock": "Set default",
+      "unlock": "Unset default"
+    },
     "deleteConfirm": {
       "title": "Delete Data Source",
       "message": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone and all associated knowledge graph data will be removed."
@@ -118,6 +123,7 @@
     "noRows": "Query returned no rows",
     "saveToMetrics": "Save to Metrics",
     "savedToMetrics": "Saved",
+    "paramBadge": "{{count}} param(s)",
     "batchSaveAll": "Save All to Metrics ({{count}})",
     "batchSaved": "Saved {{count}} metrics",
     "likeHint": "Mark as good answer (saves as AI training example)",
@@ -345,7 +351,46 @@
       "hint": "Tip: Add data sources first, then use AI to generate. You can refine the design through conversation."
     },
     "currentData": "Current Data Sources",
-    "layoutHint": "Adjust widget sizes (columns × rows):"
+    "layoutHint": "Adjust widget sizes (columns × rows):",
+    "filters": {
+      "title": "Query Filters",
+      "add": "Add condition",
+      "empty": "No conditions — showing all data",
+      "column": "Column",
+      "operator": "Operator",
+      "value": "Value",
+      "valuePlaceholder": "Value",
+      "inHint": "Separate multiple values with commas",
+      "betweenFrom": "From",
+      "betweenTo": "To",
+      "apply": "Apply",
+      "clear": "Clear",
+      "applied": "{{count}} condition(s)",
+      "saving": "Applying…",
+      "aiPlaceholder": "Describe conditions, e.g. East region, last 30 days",
+      "aiGenerate": "AI",
+      "aiThinking": "Thinking…",
+      "aiNone": "AI found no applicable conditions"
+    },
+    "globalFilters": {
+      "button": "Global Filters",
+      "title": "Report Global Filters",
+      "empty": "No global filters yet. Add one and map it to columns across your datasets.",
+      "add": "Add filter",
+      "label": "Name",
+      "appliesTo": "Applies to",
+      "addTarget": "Add mapping",
+      "hint": "These filters appear as interactive controls at the top of the report. Changing one re-queries the metrics with the condition and refreshes the charts. Leave blank to disable (show all data)."
+    },
+    "debug": {
+      "button": "Debug",
+      "subtitle": "SQL queries this report runs",
+      "noDatasets": "This report has no datasets — no SQL to trace",
+      "executedSql": "Executed SQL",
+      "baseSql": "Base metric SQL",
+      "params": "Bound params",
+      "filters": "{{count}} condition(s)"
+    }
   },
   "metrics": {
     "title": "Metric Library",
@@ -384,7 +429,19 @@
     "resultData": "Result Data",
     "noData": "No cached data. Click refresh to execute the query.",
     "runQuery": "Execute Query",
-    "emptyResult": "Query returned no rows"
+    "emptyResult": "Query returned no rows",
+    "params": {
+      "title": "Parameters",
+      "sqlHint": "Placeholders: {{name}} is a required parameter; [[ ... {{name}} ... ]] is an optional block (dropped when the value is empty).",
+      "defaultPlaceholder": "Default value (optional)",
+      "hint": "When a report is generated, these parameters become query filters at the top of the report.",
+      "ai": "AI parameterize",
+      "aiThinking": "Thinking…",
+      "aiHint": "Let AI add query-condition placeholders based on the current SQL",
+      "describe": "Describe the metric in one line (AI generates it)",
+      "describePlaceholder": "e.g. order revenue by region for the last 30 days, filterable by region and time",
+      "generate": "AI generate"
+    }
   },
   "settings": {
     "title": "Settings",

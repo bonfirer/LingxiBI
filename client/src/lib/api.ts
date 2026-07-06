@@ -14,10 +14,14 @@ import type {
   Report,
   CreateReportPayload,
   ReportDataSource,
+  FilterCondition,
+  ReportFilter,
+  ReportDebugEntry,
   ShareInfo,
   ReportGroup,
   MetricGroup,
   MetricPool,
+  MetricParam,
   CreateMetricPayload,
   LLMConfig,
   UpdateLLMConfigPayload,
@@ -61,10 +65,15 @@ export type {
   VisConfig,
   CreateReportPayload,
   ReportDataSource,
+  FilterCondition,
+  ReportFilter,
+  ReportFilterTarget,
+  ReportDebugEntry,
   ShareInfo,
   ReportGroup,
   MetricGroup,
   MetricPool,
+  MetricParam,
   CreateMetricPayload,
   LLMConfig,
   UpdateLLMConfigPayload,
@@ -141,6 +150,9 @@ export const datasourcesApi = {
     request<number[]>(`/datasources/${id}/grants`),
   setGrants: (id: number, userIds: number[]) =>
     request<number[]>(`/datasources/${id}/grants`, { method: 'PUT', body: JSON.stringify({ user_ids: userIds }) }),
+  // Lock (or clear) this datasource as the default (admin only)
+  setDefault: (id: number, isDefault: boolean) =>
+    request<DataSource>(`/datasources/${id}/default`, { method: 'PUT', body: JSON.stringify({ is_default: isDefault }) }),
 };
 
 // ── Knowledge Graph ──
@@ -205,8 +217,13 @@ export const conversationsApi = {
 // ── Query ──
 
 export const queryApi = {
-  execute: (sql: string, datasource_id: number) =>
-    request<QueryResult>('/query/execute', { method: 'POST', body: JSON.stringify({ sql, datasource_id }) }),
+  // `params` (metric param defs) resolve any {{name}} / [[ ]] placeholders in
+  // the SQL via their defaults; `paramValues` overrides those defaults.
+  execute: (sql: string, datasource_id: number, params?: MetricParam[] | null, paramValues?: Record<string, unknown>) =>
+    request<QueryResult>('/query/execute', {
+      method: 'POST',
+      body: JSON.stringify({ sql, datasource_id, params: params ?? undefined, param_values: paramValues }),
+    }),
   getPool: (poolId: number) => request<DataPool>(`/query/${poolId}`),
 };
 
@@ -244,6 +261,28 @@ export const reportsApi = {
     request<void>(`/reports/${reportId}/datasources/${dsId}`, { method: 'DELETE' }),
   refreshDatasource: (reportId: number, dsId: number) =>
     request<ReportDataSource>(`/reports/${reportId}/datasources/${dsId}/refresh`, { method: 'POST' }),
+
+  setDatasourceFilters: (reportId: number, dsId: number, filters: FilterCondition[]) =>
+    request<ReportDataSource>(`/reports/${reportId}/datasources/${dsId}/filters`, {
+      method: 'PUT',
+      body: JSON.stringify({ filters }),
+    }),
+
+  // Ask the AI to suggest filter conditions from a natural-language instruction.
+  aiDatasourceFilters: (reportId: number, dsId: number, instruction: string) =>
+    request<FilterCondition[]>(`/reports/${reportId}/datasources/${dsId}/ai-filters`, {
+      method: 'POST',
+      body: JSON.stringify({ instruction }),
+    }),
+
+  setReportFilters: (reportId: number, filters: ReportFilter[]) =>
+    request<Report>(`/reports/${reportId}/filters`, {
+      method: 'PUT',
+      body: JSON.stringify({ filters }),
+    }),
+
+  debug: (reportId: number) =>
+    request<ReportDebugEntry[]>(`/reports/${reportId}/debug`),
   updateRefreshInterval: (reportId: number, interval: number) =>
     request<Report>(`/reports/${reportId}/refresh-interval`, { method: 'PUT', body: JSON.stringify({ refresh_interval: interval }) }),
   updateStyle: (reportId: number, styleKey: string | null) =>
@@ -343,8 +382,20 @@ export const metricsApi = {
   get: (id: number) => request<MetricPool>(`/metrics/${id}`),
   create: (payload: CreateMetricPayload) =>
     request<MetricPool>('/metrics', { method: 'POST', body: JSON.stringify(payload) }),
-  update: (id: number, payload: { name?: string; description?: string; sql_query?: string; group_id?: number | null }) =>
+  update: (id: number, payload: { name?: string; description?: string; sql_query?: string; group_id?: number | null; params?: MetricParam[] | null }) =>
     request<MetricPool>(`/metrics/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  // Ask the AI to rewrite SQL with {{param}} / [[ ]] placeholders + param defs.
+  aiParameterize: (sql: string, instruction?: string, lang?: string) =>
+    request<{ sql: string; params: MetricParam[] }>('/metrics/ai-parameterize', {
+      method: 'POST',
+      body: JSON.stringify({ sql, instruction, lang }),
+    }),
+  // Generate a full parameterized metric from a natural-language description.
+  aiGenerate: (datasourceId: number, description: string, lang?: string) =>
+    request<{ name: string; sql: string; params: MetricParam[] }>('/metrics/ai-generate', {
+      method: 'POST',
+      body: JSON.stringify({ datasource_id: datasourceId, description, lang }),
+    }),
   delete: (id: number) =>
     request<void>(`/metrics/${id}`, { method: 'DELETE' }),
   refresh: (id: number) =>

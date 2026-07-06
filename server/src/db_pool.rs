@@ -43,7 +43,7 @@ impl PoolCache {
             .host(&ds.host)
             .port(ds.port as u16)
             .username(&ds.username)
-            .password(&ds.password)
+            .password(&crate::crypto::decrypt(&ds.password))
             .database(&ds.database_name);
 
         let pool = MySqlPool::connect_with(opts)
@@ -70,7 +70,7 @@ impl PoolCache {
             .host(&ds.host)
             .port(ds.port as u16)
             .username(&ds.username)
-            .password(&ds.password)
+            .password(&crate::crypto::decrypt(&ds.password))
             .database(&ds.database_name);
 
         let pool = PgPool::connect_with(opts)
@@ -96,7 +96,7 @@ impl PoolCache {
         // Slow path: build a new session pool (blocking)
         let conn_str = format!("//{}:{}/{}", ds.host, ds.port, ds.database_name);
         let username = ds.username.clone();
-        let password = ds.password.clone();
+        let password = crate::crypto::decrypt(&ds.password);
 
         let pool = tokio::task::spawn_blocking(move || {
             oracle::pool::PoolBuilder::new(username, password, conn_str)

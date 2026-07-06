@@ -94,7 +94,7 @@ pub async fn send_email(
             .map_err(|e| format!("Failed to build email: {}", e))?
     };
 
-    let creds = Credentials::new(cfg.username.clone(), cfg.password.clone());
+    let creds = Credentials::new(cfg.username.clone(), crate::crypto::decrypt(&cfg.password));
 
     // Port 465 → implicit TLS (SMTPS). Port 587 → STARTTLS. Otherwise plaintext.
     let transport = if cfg.use_tls && cfg.port == 465 {

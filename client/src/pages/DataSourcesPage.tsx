@@ -14,6 +14,8 @@ import {
   Play,
   PencilSimple,
   Key,
+  Lock,
+  LockOpen,
 } from '@phosphor-icons/react';
 import {
   datasourcesApi,
@@ -1002,7 +1004,9 @@ export default function DataSourcesPage() {
     if (searchParams.get('new') === '1') return;
     const valid = selectedDsId != null && sources.some((s) => s.id === selectedDsId);
     if (!valid) {
-      navigate(`/datasources?ds=${sources[0].id}`, { replace: true });
+      // Prefer the locked default datasource, falling back to the first one.
+      const target = sources.find((s) => s.is_default) ?? sources[0];
+      navigate(`/datasources?ds=${target.id}`, { replace: true });
     }
   }, [sources, selectedDsId, navigate, searchParams]);
 
@@ -1080,6 +1084,17 @@ export default function DataSourcesPage() {
       setTestResult(t('datasources.statusConnectionFailed'));
     } finally {
       setTestingId(null);
+    }
+  };
+
+  // Lock this datasource as the default, or unlock it if it already is.
+  const handleToggleDefault = async () => {
+    if (!selectedDsId) return;
+    try {
+      await datasourcesApi.setDefault(selectedDsId, !selectedDs?.is_default);
+      await fetchSources();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('errors.saveFailed'));
     }
   };
 
@@ -1201,6 +1216,11 @@ export default function DataSourcesPage() {
                 <StatusDot status={selectedDs.status} />
                 <span className="font-mono">{selectedDs.host}:{selectedDs.port} / {selectedDs.database_name}</span>
                 <span className="text-gray-600">({selectedDs.db_type})</span>
+                {selectedDs.is_default && (
+                  <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500">
+                    <Lock size={10} weight="fill" /> {t('datasources.default.badge')}
+                  </span>
+                )}
                 {testResult && (
                   <span className={`text-[10px] px-2 py-0.5 rounded-full ${
                     testResult === 'connected' ? 'bg-data-green/10 text-data-green' : 'bg-red-500/10 text-red-400'
@@ -1250,6 +1270,20 @@ export default function DataSourcesPage() {
                 >
                   <Key size={12} />
                   {t('datasources.access.button')}
+                </button>
+              )}
+              {admin && (
+                <button
+                  onClick={handleToggleDefault}
+                  className={`flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-md border transition-premium ${
+                    selectedDs?.is_default
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-500'
+                      : 'text-gray-400 hover:text-gray-200 bg-obsidian-800 hover:bg-obsidian-700 border-obsidian-700'
+                  }`}
+                  title={selectedDs?.is_default ? t('datasources.default.unlock') : t('datasources.default.lock')}
+                >
+                  {selectedDs?.is_default ? <Lock size={12} weight="fill" /> : <LockOpen size={12} />}
+                  {selectedDs?.is_default ? t('datasources.default.unlock') : t('datasources.default.lock')}
                 </button>
               )}
               <div className="relative">

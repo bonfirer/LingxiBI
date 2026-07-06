@@ -19,14 +19,18 @@ import {
   MagnifyingGlass,
 } from '@phosphor-icons/react';
 import { useWebSocket, type WSMessage } from '../hooks/useWebSocket';
-import { conversationsApi, datasourcesApi, queryApi, metricsApi, metricGroupsApi, type Conversation, type Message, type DataSource, type MetricGroup, type MetricPool } from '../lib/api';
+import { conversationsApi, datasourcesApi, queryApi, metricsApi, metricGroupsApi, type Conversation, type Message, type DataSource, type MetricGroup, type MetricPool, type MetricParam } from '../lib/api';
 import { EmptyState } from '../components/ui';
+
+/** A query result pool shown in the conversation. `params` is present when the
+ *  AI parameterized the query (uses {{name}} / [[ ]] placeholders). */
+type ConvPool = { id: number; name: string; sql: string; rows: number; datasource_id: number; params?: MetricParam[] };
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  pools?: { id: number; name: string; sql: string; rows: number; datasource_id: number }[];
+  pools?: ConvPool[];
 }
 
 // Map persisted DB messages into the UI shape. Assistant messages store the raw
@@ -48,13 +52,15 @@ function mapDbMessages(msgs: Message[]): ChatMessage[] {
                   sql: parsed.queries?.[i]?.sql || '',
                   rows: 0,
                   datasource_id: parsed.queries?.[i]?.datasource_id || 1,
+                  params: parsed.queries?.[i]?.params as MetricParam[] | undefined,
                 }))
-              : parsed.queries?.map((q: { sql: string; label?: string; datasource_id?: number }, i: number) => ({
+              : parsed.queries?.map((q: { sql: string; label?: string; datasource_id?: number; params?: MetricParam[] }, i: number) => ({
                   id: i,
                   name: q.label || `Query ${i + 1}`,
                   sql: q.sql || '',
                   rows: 0,
                   datasource_id: q.datasource_id || 1,
+                  params: q.params,
                 })) || undefined,
           };
         }
@@ -106,10 +112,23 @@ export default function ConversationsPage() {
     fetchConversations();
     datasourcesApi.list().then((ds) => {
       setDatasources(ds);
-      if (ds.length > 0 && !selectedDsId) { setSelectedDsId(ds[0].id); localStorage.setItem('conv-datasource-id', String(ds[0].id)); }
+      if (ds.length > 0 && !selectedDsId) {
+        // Prefer the locked default datasource, falling back to the first one.
+        const target = ds.find((d) => d.is_default) ?? ds[0];
+        setSelectedDsId(target.id);
+        localStorage.setItem('conv-datasource-id', String(target.id));
+      }
     }).catch(() => {});
     metricsApi.list().then(setMetrics).catch(() => {});
   }, [fetchConversations]);
+
+  // Keep the metrics list fresh so already-favorited pools show as saved
+  // (e.g. after saving here, or from the Metrics page).
+  useEffect(() => {
+    const refresh = () => { metricsApi.list().then(setMetrics).catch(() => {}); };
+    window.addEventListener('metrics-updated', refresh);
+    return () => window.removeEventListener('metrics-updated', refresh);
+  }, []);
 
   // Load messages when active conversation changes, and resume any in-progress
   // async generation (poll until the server finishes, then show the result).
@@ -209,6 +228,7 @@ export default function ConversationsPage() {
               sql: (msg.sql as string) || '',
               rows: (msg.row_count as number) || 0,
               datasource_id: (msg.datasource_id as number) || 1,
+              params: (msg.params as MetricParam[]) || undefined,
             },
           ];
         }
@@ -571,11 +591,11 @@ export default function ConversationsPage() {
                           {t('conv.queryResults')}
                         </span>
                         {msg.pools.length > 1 && (
-                          <BatchSaveButton pools={msg.pools} t={t} />
+                          <BatchSaveButton pools={msg.pools} metrics={metrics} t={t} />
                         )}
                       </div>
                       {msg.pools.map((p) => (
-                        <PoolResultCard key={p.id} pool={p} t={t} />
+                        <PoolResultCard key={p.id} pool={p} metrics={metrics} t={t} />
                       ))}
                     </div>
                   )}
@@ -731,18 +751,34 @@ export default function ConversationsPage() {
 }
 
 // ── Expandable Pool Result Card ──
+/** A pool is already favorited if a metric with the same datasource + SQL
+ *  exists. Data pool ids change per query, so we match on SQL, not id. */
+function poolAlreadySaved(
+  pool: { sql: string; datasource_id: number },
+  metrics: MetricPool[],
+): boolean {
+  const sql = pool.sql.trim();
+  return metrics.some((m) => m.datasource_id === pool.datasource_id && m.sql_query.trim() === sql);
+}
+
 function PoolResultCard({
   pool,
+  metrics,
   t,
 }: {
-  pool: { id: number; name: string; sql: string; rows: number; datasource_id: number };
+  pool: ConvPool;
+  metrics: MetricPool[];
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [data, setData] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  // Reflect whether this pool is already in the metric library (persists across
+  // conversation reloads, unlike a purely local "saved" flag).
+  const alreadySaved = poolAlreadySaved(pool, metrics);
+  const [savedLocal, setSavedLocal] = useState(false);
+  const saved = savedLocal || alreadySaved;
 
   const handleExpand = async () => {
     if (expanded) {
@@ -768,6 +804,7 @@ function PoolResultCard({
   };
 
   const handleSaveToMetrics = async () => {
+    if (saved) return;
     try {
       setSaving(true);
       await metricsApi.create({
@@ -776,7 +813,8 @@ function PoolResultCard({
         datasource_id: pool.datasource_id,
         source_pool_id: pool.id,
       });
-      setSaved(true);
+      setSavedLocal(true);
+      window.dispatchEvent(new Event('metrics-updated'));
     } catch {
       // silent
     } finally {
@@ -800,6 +838,14 @@ function PoolResultCard({
         <span className="font-mono text-[10px] text-data-green truncate flex-1">
           {pool.name}
         </span>
+        {pool.params && pool.params.length > 0 && (
+          <span
+            className="text-[8px] text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded px-1 py-0.5 flex-shrink-0"
+            title={pool.params.map((p) => p.label || p.name).join(', ')}
+          >
+            {t('conv.paramBadge', { count: pool.params.length })}
+          </span>
+        )}
         <span className="text-[9px] text-gray-500 flex-shrink-0">
           {pool.rows.toLocaleString()} rows
         </span>
@@ -888,13 +934,18 @@ function PoolResultCard({
 // ── Batch Save All Pools to Metrics ──
 function BatchSaveButton({
   pools,
+  metrics,
   t,
 }: {
-  pools: { id: number; name: string; sql: string; rows: number; datasource_id: number }[];
+  pools: ConvPool[];
+  metrics: MetricPool[];
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  // Consider the batch saved once every pool already exists in the library.
+  const allAlreadySaved = pools.length > 0 && pools.every((p) => poolAlreadySaved(p, metrics));
+  const [savedLocal, setSavedLocal] = useState(false);
+  const saved = savedLocal || allAlreadySaved;
   const [showPicker, setShowPicker] = useState(false);
   const [groups, setGroups] = useState<MetricGroup[]>([]);
   const [newGroupName, setNewGroupName] = useState('');
@@ -927,7 +978,7 @@ function BatchSaveButton({
           })
         )
       );
-      setSaved(true);
+      setSavedLocal(true);
       setShowPicker(false);
       window.dispatchEvent(new Event('metrics-updated'));
     } catch {

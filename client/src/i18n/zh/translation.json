@@ -63,6 +63,11 @@
       "adminsNote": "管理员始终拥有访问权限：{{names}}",
       "noMembers": "还没有成员账户，可在设置中创建。"
     },
+    "default": {
+      "badge": "默认",
+      "lock": "设为默认",
+      "unlock": "取消默认"
+    },
     "deleteConfirm": {
       "title": "确认删除数据源",
       "message": "确定要删除「{{name}}」吗？此操作不可撤销，相关的知识图谱数据也将被清除。"
@@ -118,6 +123,7 @@
     "noRows": "查询未返回数据",
     "saveToMetrics": "收藏到指标库",
     "savedToMetrics": "已收藏",
+    "paramBadge": "{{count}} 参数",
     "batchSaveAll": "全部保存到指标库 ({{count}})",
     "batchSaved": "已保存 {{count}} 个指标",
     "likeHint": "标记为好的回答（保存为 AI 训练示例）",
@@ -345,7 +351,46 @@
       "hint": "提示：先添加数据源，再用 AI 生成页面。你可以随时通过对话调整样式。"
     },
     "currentData": "当前数据源",
-    "layoutHint": "调整组件尺寸（列数 × 行数）："
+    "layoutHint": "调整组件尺寸（列数 × 行数）：",
+    "filters": {
+      "title": "查询条件",
+      "add": "添加条件",
+      "empty": "暂无条件，展示全部数据",
+      "column": "字段",
+      "operator": "运算符",
+      "value": "值",
+      "valuePlaceholder": "值",
+      "inHint": "多个值用逗号分隔",
+      "betweenFrom": "起始",
+      "betweenTo": "结束",
+      "apply": "应用",
+      "clear": "清空",
+      "applied": "{{count}} 个条件",
+      "saving": "应用中…",
+      "aiPlaceholder": "用自然语言描述条件，如：华东区最近30天",
+      "aiGenerate": "AI 生成",
+      "aiThinking": "生成中…",
+      "aiNone": "AI 没有匹配到可用的条件"
+    },
+    "globalFilters": {
+      "button": "全局筛选",
+      "title": "报表全局筛选器",
+      "empty": "还没有全局筛选器。添加一个，把它映射到各数据集的字段上。",
+      "add": "添加筛选器",
+      "label": "名称",
+      "appliesTo": "作用于",
+      "addTarget": "添加映射",
+      "hint": "这些筛选会作为交互控件出现在报表顶部，修改后会带着条件重新查询指标并刷新图表。留空表示不生效（展示全部数据）。"
+    },
+    "debug": {
+      "button": "调试",
+      "subtitle": "报表相关的 SQL 查询记录",
+      "noDatasets": "该报表没有数据集，无 SQL 记录",
+      "executedSql": "实际执行的 SQL",
+      "baseSql": "原始指标 SQL",
+      "params": "绑定参数",
+      "filters": "{{count}} 个条件"
+    }
   },
   "metrics": {
     "title": "指标库",
@@ -384,7 +429,19 @@
     "resultData": "查询结果",
     "noData": "暂无缓存数据，点击刷新执行查询。",
     "runQuery": "执行查询",
-    "emptyResult": "查询未返回数据"
+    "emptyResult": "查询未返回数据",
+    "params": {
+      "title": "参数",
+      "sqlHint": "可用占位符：{{name}} 为必填参数；[[ ... {{name}} ... ]] 为可选块（无值时整块忽略）。",
+      "defaultPlaceholder": "默认值（可选）",
+      "hint": "生成报表时，这些参数会自动变成报表顶部的查询条件。",
+      "ai": "AI 参数化",
+      "aiThinking": "生成中…",
+      "aiHint": "让 AI 根据当前 SQL 自动加上查询条件占位符",
+      "describe": "用一句话描述指标（AI 生成）",
+      "describePlaceholder": "如：按地区统计最近30天的订单金额，可按地区和时间筛选",
+      "generate": "AI 生成"
+    }
   },
   "settings": {
     "title": "设置",

@@ -62,7 +62,7 @@ pub async fn create(
     .bind(payload.port.unwrap_or(3306))
     .bind(&payload.database_name)
     .bind(&payload.username)
-    .bind(&payload.password)
+    .bind(crate::crypto::encrypt(&payload.password))
     .execute(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;
@@ -130,6 +130,14 @@ pub async fn update(
         .map_err(crate::routes::internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "Data source not found".to_string()))?;
 
+    // Only overwrite the password when a non-empty value is provided; otherwise
+    // keep the existing (already-encrypted) one. `encrypt` is idempotent, so
+    // re-encrypting the stored ciphertext leaves it unchanged.
+    let password = match payload.password.as_deref() {
+        Some(p) if !p.is_empty() => crate::crypto::encrypt(p),
+        _ => existing.password.clone(),
+    };
+
     sqlx::query(
         "UPDATE datasources SET name=?, host=?, port=?, database_name=?, username=?, password=? WHERE id=?",
     )
@@ -138,7 +146,7 @@ pub async fn update(
     .bind(payload.port.unwrap_or(existing.port))
     .bind(payload.database_name.as_deref().unwrap_or(&existing.database_name))
     .bind(payload.username.as_deref().unwrap_or(&existing.username))
-    .bind(payload.password.as_deref().unwrap_or(&existing.password))
+    .bind(&password)
     .bind(id)
     .execute(&state.db)
     .await
@@ -312,6 +320,65 @@ pub async fn profile(
         "status": "ok",
         "columns_profiled": count
     })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetDefault {
+    #[serde(default = "default_true")]
+    pub is_default: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// PUT /api/datasources/{id}/default — lock this datasource as the default, or
+/// clear it (admin only). Setting a default clears the flag on all others so at
+/// most one datasource is ever the default.
+pub async fn set_default(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+    Json(payload): Json<SetDefault>,
+) -> Result<Json<DataSource>, (StatusCode, String)> {
+    ensure_admin(&user)?;
+
+    // Confirm the datasource exists.
+    sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Data source not found".to_string()))?;
+
+    let mut tx = state.db.begin().await.map_err(internal_error)?;
+    if payload.is_default {
+        // Exactly one default: clear everyone, then set this one.
+        sqlx::query("UPDATE datasources SET is_default = 0 WHERE is_default = 1")
+            .execute(&mut *tx)
+            .await
+            .map_err(internal_error)?;
+        sqlx::query("UPDATE datasources SET is_default = 1 WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal_error)?;
+    } else {
+        sqlx::query("UPDATE datasources SET is_default = 0 WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal_error)?;
+    }
+    tx.commit().await.map_err(internal_error)?;
+
+    let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(ds))
 }
 
 // ── Datasource access grants (admin only) ──

@@ -45,7 +45,7 @@ pub async fn list(
          CASE WHEN html_content IS NOT NULL THEN '1' END AS html_content, \
          CASE WHEN published_html IS NOT NULL THEN '1' END AS published_html, \
          refresh_interval, generation_status, generation_error, style_key, design_score, \
-         owner_user_id, created_at, updated_at \
+         report_filters, owner_user_id, created_at, updated_at \
          FROM reports WHERE (owner_user_id = ? OR ? = 1) ORDER BY updated_at DESC",
     )
     .bind(user.id)
@@ -130,6 +130,12 @@ pub async fn render(
     let report = load_owned_report(&state, id, &user).await?;
 
     if let Some(prompt) = body.prompt.clone() {
+        // Surface the metrics' declared parameters as report-level filter
+        // controls, so the generated dashboard gets interactive conditions wired
+        // to the `{{param}}` placeholders. Only adds missing ones — never
+        // clobbers controls the user configured.
+        sync_param_filters(&state, id).await;
+
         // Optionally load a saved theme to generate in (full row incl. sample_html).
         let theme = if let Some(theme_id) = body.theme_id {
             let t = sqlx::query_as::<_, ReportTheme>(
@@ -673,6 +679,31 @@ pub async fn get_html(
         html.insert_str(pos, &inject);
     }
 
+    // Inject the interactive filter bar (from the report's global filters). The
+    // head script wraps fetch so /data calls carry current control values; the
+    // bar HTML goes at the top of <body>. The (LLM-generated) charts re-render
+    // via their existing refreshData() when a control changes.
+    if let Some((head_js, body_html)) = render_report_filter_bar(&report.report_filters) {
+        if let Some(pos) = html.find("<head>") {
+            html.insert_str(pos + "<head>".len(), &head_js);
+        } else if let Some(pos) = html.find("<html>") {
+            html.insert_str(pos + "<html>".len(), &head_js);
+        } else {
+            html.insert_str(0, &head_js);
+        }
+        // <body> may carry attributes (e.g. <body class="...">), so insert
+        // right after the tag's closing '>'.
+        if let Some(bstart) = html.find("<body") {
+            if let Some(gt) = html[bstart..].find('>') {
+                html.insert_str(bstart + gt + 1, &body_html);
+            } else {
+                html.insert_str(0, &body_html);
+            }
+        } else {
+            html.insert_str(0, &body_html);
+        }
+    }
+
     // The page's live-data fetch (/api/reports/{id}/data) runs inside the iframe and
     // cannot set an Authorization header. Forward the token (passed to this endpoint
     // via ?token=) by wrapping fetch to append it to same-origin /api/ requests.
@@ -738,14 +769,301 @@ pub async fn view_shared_html(
     Ok(axum::response::Html(html))
 }
 
+/// HTML-attribute escaping for injected filter control values.
+fn esc_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Render a stored filter value as a plain string for prefilling a control.
+fn filter_value_display(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .map(filter_value_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => String::new(),
+    }
+}
+
+/// Build the interactive filter bar for a rendered dashboard from the report's
+/// global filter controls. Returns `(head_js, body_html)`:
+/// - `head_js` wraps `window.fetch` so every `/data` request carries the current
+///   control values as `f_<key>` params, and exposes apply/reset helpers.
+/// - `body_html` is the sticky bar with one control per filter.
+///
+/// Returns None when the report has no global filters. This injection owns the
+/// filter wiring, so the (LLM-generated) dashboard body doesn't need to know
+/// anything about filters — it just keeps fetching `/data` as usual.
+fn render_report_filter_bar(report_filters: &Option<serde_json::Value>) -> Option<(String, String)> {
+    let filters: Vec<ReportFilter> = serde_json::from_value(report_filters.clone()?).ok()?;
+    if filters.is_empty() {
+        return None;
+    }
+
+    let input_style = "background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);border-radius:6px;padding:3px 7px;font:12px system-ui,sans-serif;color:#e5e7eb;min-width:90px";
+    let btn_style = "background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);color:#f59e0b;border-radius:6px;padding:3px 12px;font:12px system-ui,sans-serif;cursor:pointer";
+    let ghost_btn = "background:transparent;border:1px solid rgba(255,255,255,0.14);color:#9ca3af;border-radius:6px;padding:3px 10px;font:12px system-ui,sans-serif;cursor:pointer";
+
+    let mut items = String::new();
+    for f in &filters {
+        let op = f.op.trim().to_uppercase();
+        let label = esc_attr(f.label.as_deref().unwrap_or(&f.key));
+        let key = esc_attr(&f.key);
+        let op_attr = esc_attr(&op);
+
+        let control = if op == "BETWEEN" {
+            let (from, to) = match &f.value {
+                serde_json::Value::Array(a) if a.len() == 2 => {
+                    (filter_value_display(&a[0]), filter_value_display(&a[1]))
+                }
+                _ => (String::new(), String::new()),
+            };
+            format!(
+                r#"<input class="f-from" type="text" value="{}" placeholder="起" onchange="__applyReportFilters__()" style="{}"/>
+<span style="color:#6b7280">~</span>
+<input class="f-to" type="text" value="{}" placeholder="止" onchange="__applyReportFilters__()" style="{}"/>"#,
+                esc_attr(&from), input_style, esc_attr(&to), input_style
+            )
+        } else {
+            let placeholder = if op == "IN" { "逗号分隔" } else { "" };
+            format!(
+                r#"<input class="f-val" type="text" value="{}" placeholder="{}" onchange="__applyReportFilters__()" style="{}"/>"#,
+                esc_attr(&filter_value_display(&f.value)),
+                placeholder,
+                input_style
+            )
+        };
+
+        items.push_str(&format!(
+            r#"<div class="rf-item" data-filter-key="{}" data-filter-op="{}" style="display:flex;align-items:center;gap:5px">
+<label style="color:#9ca3af;font-size:11px">{}</label>{}</div>"#,
+            key, op_attr, label, control
+        ));
+    }
+
+    let body_html = format!(
+        r#"<div id="__report_filter_bar__" style="position:sticky;top:0;z-index:99999;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 14px;background:rgba(13,13,20,0.92);backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,255,255,0.08)">
+<span style="font-weight:600;color:#f59e0b;font:12px system-ui,sans-serif">筛选</span>
+{items}
+<button onclick="__applyReportFilters__()" style="{btn_style}">应用</button>
+<button onclick="__resetReportFilters__()" style="{ghost_btn}">重置</button>
+</div>"#
+    );
+
+    let head_js = r#"<script>(function(){
+function collect(){
+  var qs=[];
+  var items=document.querySelectorAll('#__report_filter_bar__ .rf-item');
+  items.forEach(function(el){
+    var key=el.getAttribute('data-filter-key');
+    var op=el.getAttribute('data-filter-op');
+    var val='';
+    if(op==='BETWEEN'){
+      var a=el.querySelector('.f-from'); var b=el.querySelector('.f-to');
+      var f=a?a.value.trim():''; var t=b?b.value.trim():'';
+      val=(f&&t)?(f+','+t):'';
+    } else {
+      var i=el.querySelector('.f-val'); val=i?i.value.trim():'';
+    }
+    qs.push('f_'+encodeURIComponent(key)+'='+encodeURIComponent(val));
+  });
+  return qs.join('&');
+}
+var _f=window.fetch;
+window.fetch=function(u,o){
+  try{
+    if(typeof u==='string' && u.indexOf('/data')!==-1){
+      var extra=collect();
+      if(extra) u+=(u.indexOf('?')!==-1?'&':'?')+extra;
+    }
+  }catch(e){}
+  return _f.call(this,u,o);
+};
+window.__applyReportFilters__=function(){ if(typeof refreshData==='function'){try{refreshData();}catch(e){}} };
+window.__resetReportFilters__=function(){
+  document.querySelectorAll('#__report_filter_bar__ input').forEach(function(i){i.value='';});
+  window.__applyReportFilters__();
+};
+})();</script>"#.to_string();
+
+    Some((head_js, body_html))
+}
+
+/// Coerce a raw string token to a JSON value: number when numeric, else string.
+/// Mirrors the client's coercion so numeric comparisons stay numeric.
+fn coerce_runtime_token(raw: &str) -> serde_json::Value {
+    let s = raw.trim();
+    if s.is_empty() {
+        return serde_json::Value::String(String::new());
+    }
+    if let Ok(i) = s.parse::<i64>() {
+        return serde_json::Value::Number(i.into());
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return serde_json::Value::Number(n);
+        }
+    }
+    serde_json::Value::String(s.to_string())
+}
+
+/// Build the runtime value for a control from its `f_<key>` request param,
+/// shaped for the control's operator (array for IN, [min,max] for BETWEEN,
+/// scalar otherwise). Comma-separates multi-value inputs.
+fn runtime_value_for_op(op: &str, raw: &str) -> serde_json::Value {
+    match op.trim().to_uppercase().as_str() {
+        "IN" => serde_json::Value::Array(
+            raw.split(',')
+                .map(|p| coerce_runtime_token(p))
+                .filter(|v| !matches!(v, serde_json::Value::String(s) if s.is_empty()))
+                .collect(),
+        ),
+        "BETWEEN" => {
+            let parts: Vec<&str> = raw.split(',').collect();
+            if parts.len() == 2 {
+                serde_json::Value::Array(vec![
+                    coerce_runtime_token(parts[0]),
+                    coerce_runtime_token(parts[1]),
+                ])
+            } else {
+                // Not a complete range → blank so the control is treated inactive.
+                serde_json::Value::String(String::new())
+            }
+        }
+        _ => coerce_runtime_token(raw),
+    }
+}
+
+/// Produce a report_filters JSON where each control's `value` is replaced by the
+/// matching `f_<key>` request param, when present. Controls with no param keep
+/// their stored value. Returns None when there are no stored filters.
+fn apply_runtime_filter_values(
+    stored: &Option<serde_json::Value>,
+    params: &HashMap<String, String>,
+) -> Option<serde_json::Value> {
+    let stored = stored.as_ref()?;
+    let mut filters: Vec<ReportFilter> = serde_json::from_value(stored.clone()).ok()?;
+    for f in &mut filters {
+        if let Some(raw) = params.get(&format!("f_{}", f.key)) {
+            f.value = runtime_value_for_op(&f.op, raw);
+        }
+    }
+    serde_json::to_value(&filters).ok()
+}
+
+/// Ensure the report has a global filter control for each parameter declared by
+/// its datasets' metrics. Existing controls (by key) are preserved; only missing
+/// param controls are appended. Param controls carry no column `targets` — their
+/// value flows into the metric's `{{param}}` placeholder by name at query time.
+async fn sync_param_filters(state: &AppState, report_id: i32) {
+    // Collect distinct metric ids used by the report's datasets.
+    let metric_ids: Vec<(Option<i32>,)> = sqlx::query_as(
+        "SELECT DISTINCT metric_id FROM report_datasources WHERE report_id = ? AND metric_id IS NOT NULL",
+    )
+    .bind(report_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    // Gather declared params across those metrics.
+    let mut params: Vec<MetricParam> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (mid,) in metric_ids.into_iter().flat_map(|(m,)| m.map(|x| (x,))) {
+        let row: Option<(Option<serde_json::Value>,)> =
+            sqlx::query_as("SELECT params FROM metric_pools WHERE id = ?")
+                .bind(mid)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+        if let Some((Some(v),)) = row {
+            if let Ok(defs) = serde_json::from_value::<Vec<MetricParam>>(v) {
+                for d in defs {
+                    if seen.insert(d.name.clone()) {
+                        params.push(d);
+                    }
+                }
+            }
+        }
+    }
+    if params.is_empty() {
+        return;
+    }
+
+    // Load existing controls and index by key.
+    let existing_row: Option<(Option<serde_json::Value>,)> =
+        sqlx::query_as("SELECT report_filters FROM reports WHERE id = ?")
+            .bind(report_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    let mut controls: Vec<ReportFilter> = existing_row
+        .and_then(|(v,)| v)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let have: std::collections::HashSet<String> = controls.iter().map(|c| c.key.clone()).collect();
+
+    let mut changed = false;
+    for p in params {
+        if have.contains(&p.name) {
+            continue;
+        }
+        controls.push(ReportFilter {
+            key: p.name.clone(),
+            label: Some(p.label.unwrap_or_else(|| p.name.clone())),
+            // Scalar control: its value fills the metric's {{param}} placeholder.
+            op: "=".to_string(),
+            value: p.default.unwrap_or(serde_json::Value::String(String::new())),
+            targets: Vec::new(),
+        });
+        changed = true;
+    }
+
+    if changed {
+        if let Ok(v) = serde_json::to_value(&controls) {
+            let _ = sqlx::query("UPDATE reports SET report_filters = ? WHERE id = ?")
+                .bind(&v)
+                .bind(report_id)
+                .execute(&state.db)
+                .await;
+        }
+    }
+}
+
+/// Default parameter values for a report dataset's linked metric (if any), used
+/// to resolve `{{param}}` placeholders when no runtime value is supplied.
+async fn metric_param_defaults(
+    state: &AppState,
+    metric_id: Option<i32>,
+) -> HashMap<String, serde_json::Value> {
+    let Some(mid) = metric_id else { return HashMap::new() };
+    let row: Option<(Option<serde_json::Value>,)> =
+        sqlx::query_as("SELECT params FROM metric_pools WHERE id = ?")
+            .bind(mid)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    crate::routes::query::param_defaults(&row.and_then(|(p,)| p))
+}
+
 /// Return live data for a report's datasources (re-executes SQL queries).
 /// This endpoint is called by the HTML page inside the iframe to get fresh data.
 pub async fn get_live_data(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
-    load_owned_report(&state, id, &user).await?;
+    let report = load_owned_report(&state, id, &user).await?;
 
     let report_ds: Vec<ReportDataSource> = sqlx::query_as::<_, ReportDataSource>(
         "SELECT * FROM report_datasources WHERE report_id = ?"
@@ -754,6 +1072,18 @@ pub async fn get_live_data(
     .fetch_all(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;
+
+    // Runtime filter values from the request override the stored global-filter
+    // values (interactive controls in the rendered dashboard pass `f_<key>`).
+    // Passing None/empty leaves the stored values in effect.
+    let effective_report_filters = apply_runtime_filter_values(&report.report_filters, &params);
+
+    // The same `f_<name>` request params also feed metric SQL placeholders
+    // ({{name}} / [[ ]] blocks). Coerce each to a scalar value keyed by name.
+    let request_param_values: HashMap<String, serde_json::Value> = params
+        .iter()
+        .filter_map(|(k, v)| k.strip_prefix("f_").map(|name| (name.to_string(), coerce_runtime_token(v))))
+        .collect();
 
     let mut results = Vec::new();
 
@@ -766,7 +1096,26 @@ pub async fn get_live_data(
             .map_err(crate::routes::internal_error)?;
 
         let fresh_data = if let Some(source) = ds_info {
-            match crate::routes::query::execute_validated(&state, &source, &ds.sql_query).await {
+            // Combine the dataset's own filters with report-level global
+            // controls that target it. No effective filters => metric SQL runs
+            // unchanged.
+            let ds_filters: Vec<FilterCondition> = ds
+                .filters
+                .as_ref()
+                .and_then(|v| serde_json::from_value::<Vec<FilterCondition>>(v.clone()).ok())
+                .unwrap_or_default();
+            let filters = crate::routes::query::combined_filters(
+                ds_filters,
+                &effective_report_filters,
+                ds.datasource_id,
+            );
+            // Metric parameter values: the metric's defaults overlaid with any
+            // runtime request values (by param name).
+            let mut param_values = metric_param_defaults(&state, ds.metric_id).await;
+            for (k, v) in &request_param_values {
+                param_values.insert(k.clone(), v.clone());
+            }
+            match crate::routes::query::execute_metric_sql(&state, &source, &ds.sql_query, &param_values, &filters).await {
                 Ok(result) => serde_json::to_value(&result.rows).unwrap_or(serde_json::Value::Array(vec![])),
                 Err(_) => ds.result_cache.clone().unwrap_or(serde_json::Value::Array(vec![])),
             }
@@ -782,6 +1131,221 @@ pub async fn get_live_data(
     }
 
     Ok(Json(results))
+}
+
+/// Set (or clear) the report's global filter controls, then refresh each
+/// dataset's cache so previews/thumbnails reflect the new selection. An empty
+/// `filters` array clears them and reverts to per-dataset behavior.
+pub async fn set_report_filters(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+    Json(payload): Json<SetReportFilters>,
+) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
+
+    let filters_value: Option<serde_json::Value> = if payload.filters.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&payload.filters).ok()
+    };
+
+    sqlx::query("UPDATE reports SET report_filters = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(&filters_value)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(crate::routes::internal_error)?;
+
+    // Refresh each dataset's cached result with the combined (dataset + global)
+    // filters. Failures are non-fatal — the live-data path still recomputes on
+    // view, so a datasource that errors under the new filter just keeps its old
+    // cache rather than blocking the whole apply.
+    let report_ds: Vec<ReportDataSource> = sqlx::query_as::<_, ReportDataSource>(
+        "SELECT * FROM report_datasources WHERE report_id = ?",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(crate::routes::internal_error)?;
+
+    for ds in &report_ds {
+        let source = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+            .bind(ds.datasource_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(crate::routes::internal_error)?;
+        let Some(source) = source else { continue };
+
+        let ds_filters: Vec<FilterCondition> = ds
+            .filters
+            .as_ref()
+            .and_then(|v| serde_json::from_value::<Vec<FilterCondition>>(v.clone()).ok())
+            .unwrap_or_default();
+        let filters = crate::routes::query::combined_filters(
+            ds_filters,
+            &filters_value,
+            ds.datasource_id,
+        );
+
+        let param_values = metric_param_defaults(&state, ds.metric_id).await;
+        if let Ok(qr) =
+            crate::routes::query::execute_metric_sql(&state, &source, &ds.sql_query, &param_values, &filters).await
+        {
+            let cache = serde_json::to_value(&qr.rows).ok();
+            let _ = sqlx::query("UPDATE report_datasources SET result_cache=?, row_count=? WHERE id=?")
+                .bind(&cache)
+                .bind(qr.row_count as i32)
+                .bind(ds.id)
+                .execute(&state.db)
+                .await;
+        }
+    }
+
+    let updated = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(crate::routes::internal_error)?;
+
+    Ok(Json(updated))
+}
+
+/// Debug trace of the SQL a report runs: for each dataset, the actual executed
+/// query (base or filter-wrapped), its bound params, timing, row count, and any
+/// error. Owner-only; called on demand when the debug panel is opened, so no
+/// SQL is executed for this purpose unless the user asks for it.
+pub async fn debug_sql(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+) -> Result<Json<Vec<ReportDebugEntry>>, (StatusCode, String)> {
+    let report = load_owned_report(&state, id, &user).await?;
+
+    let report_ds: Vec<ReportDataSource> = sqlx::query_as::<_, ReportDataSource>(
+        "SELECT * FROM report_datasources WHERE report_id = ? ORDER BY created_at ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(crate::routes::internal_error)?;
+
+    let mut entries: Vec<ReportDebugEntry> = Vec::new();
+
+    for ds in &report_ds {
+        let source = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+            .bind(ds.datasource_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(crate::routes::internal_error)?;
+
+        let Some(source) = source else {
+            entries.push(ReportDebugEntry {
+                dataset_id: ds.id,
+                name: ds.name.clone(),
+                datasource_id: ds.datasource_id,
+                db_type: "unknown".to_string(),
+                base_sql: ds.sql_query.clone(),
+                effective_sql: ds.sql_query.clone(),
+                params: vec![],
+                filter_count: 0,
+                row_count: ds.row_count.map(|n| n as usize),
+                duration_ms: 0,
+                executed_at: chrono::Utc::now(),
+                error: Some("Data source not found".to_string()),
+            });
+            continue;
+        };
+
+        // Combine dataset filters (方案 B) with report-level controls (方案 C).
+        let ds_filters: Vec<FilterCondition> = ds
+            .filters
+            .as_ref()
+            .and_then(|v| serde_json::from_value::<Vec<FilterCondition>>(v.clone()).ok())
+            .unwrap_or_default();
+        let filters = crate::routes::query::combined_filters(
+            ds_filters,
+            &report.report_filters,
+            ds.datasource_id,
+        );
+        let filter_count = filters.len();
+
+        // Resolve the exact SQL + binds that will run (param rendering + filter
+        // wrap), so the debug view matches execution.
+        let param_values = metric_param_defaults(&state, ds.metric_id).await;
+        let mut idx = 1usize;
+        let (effective_sql, params, build_err) = match crate::routes::query::render_parameterized_sql(
+            &ds.sql_query,
+            &param_values,
+            &source.db_type,
+            &mut idx,
+        ) {
+            Err(e) => (ds.sql_query.clone(), vec![], Some(e)),
+            Ok((rendered, mut binds)) => {
+                match crate::routes::query::build_filtered_sql_from(&rendered, &filters, &source.db_type, &mut idx) {
+                    Ok(Some((wrapped, mut fb))) => {
+                        binds.append(&mut fb);
+                        (wrapped, binds, None)
+                    }
+                    Ok(None) => (rendered, binds, None),
+                    Err(e) => (ds.sql_query.clone(), vec![], Some(e)),
+                }
+            }
+        };
+
+        // If the filter build failed, report it without executing.
+        if let Some(err) = build_err {
+            entries.push(ReportDebugEntry {
+                dataset_id: ds.id,
+                name: ds.name.clone(),
+                datasource_id: ds.datasource_id,
+                db_type: source.db_type.clone(),
+                base_sql: ds.sql_query.clone(),
+                effective_sql,
+                params,
+                filter_count,
+                row_count: None,
+                duration_ms: 0,
+                executed_at: chrono::Utc::now(),
+                error: Some(err),
+            });
+            continue;
+        }
+
+        let executed_at = chrono::Utc::now();
+        let start = std::time::Instant::now();
+        let result = crate::routes::query::execute_metric_sql(
+            &state,
+            &source,
+            &ds.sql_query,
+            &param_values,
+            &filters,
+        )
+        .await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let (row_count, error) = match result {
+            Ok(qr) => (Some(qr.row_count), None),
+            Err(e) => (None, Some(e)),
+        };
+
+        entries.push(ReportDebugEntry {
+            dataset_id: ds.id,
+            name: ds.name.clone(),
+            datasource_id: ds.datasource_id,
+            db_type: source.db_type.clone(),
+            base_sql: ds.sql_query.clone(),
+            effective_sql,
+            params,
+            filter_count,
+            row_count,
+            duration_ms,
+            executed_at,
+            error,
+        });
+    }
+
+    Ok(Json(entries))
 }
 
 /// Update the refresh interval for a report.
@@ -1289,5 +1853,70 @@ pub async fn ask_report(
             ).await;
             Err((StatusCode::BAD_GATEWAY, format!("AI Q&A failed: {}", e)))
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_filter_tests {
+    use super::{apply_runtime_filter_values, runtime_value_for_op};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn scalar_coercion() {
+        assert_eq!(runtime_value_for_op("=", "华东"), json!("华东"));
+        assert_eq!(runtime_value_for_op(">=", "100"), json!(100));
+        assert_eq!(runtime_value_for_op("=", "3.5"), json!(3.5));
+        // Blank stays a blank string (treated as inactive downstream).
+        assert_eq!(runtime_value_for_op("=", "  "), json!(""));
+    }
+
+    #[test]
+    fn in_splits_and_drops_blanks() {
+        assert_eq!(runtime_value_for_op("IN", "A, B ,C"), json!(["A", "B", "C"]));
+        assert_eq!(runtime_value_for_op("IN", "1,2,3"), json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn between_requires_two_parts() {
+        assert_eq!(
+            runtime_value_for_op("BETWEEN", "2024-01-01,2024-12-31"),
+            json!(["2024-01-01", "2024-12-31"])
+        );
+        // Incomplete range => blank (inactive).
+        assert_eq!(runtime_value_for_op("BETWEEN", "2024-01-01"), json!(""));
+    }
+
+    #[test]
+    fn override_replaces_only_matching_keys() {
+        let stored = json!([
+            {"key": "region", "op": "=", "value": "华北", "targets": [{"datasource_id": 1, "column": "region"}]},
+            {"key": "d", "op": "BETWEEN", "value": ["2024-01-01", "2024-12-31"], "targets": [{"datasource_id": 1, "column": "created_at"}]}
+        ]);
+        let mut params = HashMap::new();
+        params.insert("f_region".to_string(), "华东".to_string());
+        // 'd' has no param => keeps its stored value.
+
+        let out = apply_runtime_filter_values(&Some(stored), &params).unwrap();
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr[0]["value"], json!("华东"));
+        assert_eq!(arr[1]["value"], json!(["2024-01-01", "2024-12-31"]));
+    }
+
+    #[test]
+    fn override_with_no_stored_filters_is_none() {
+        let params = HashMap::new();
+        assert!(apply_runtime_filter_values(&None, &params).is_none());
+    }
+
+    #[test]
+    fn empty_param_clears_control() {
+        let stored = json!([
+            {"key": "region", "op": "=", "value": "华北", "targets": [{"datasource_id": 1, "column": "region"}]}
+        ]);
+        let mut params = HashMap::new();
+        params.insert("f_region".to_string(), "".to_string());
+        let out = apply_runtime_filter_values(&Some(stored), &params).unwrap();
+        assert_eq!(out.as_array().unwrap()[0]["value"], json!(""));
     }
 }

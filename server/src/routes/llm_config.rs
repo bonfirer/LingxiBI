@@ -41,9 +41,10 @@ pub async fn update_config(
     .bind(payload.base_url.as_deref().unwrap_or(&existing.base_url))
     // Treat empty/missing api_key as "keep existing" — the GET endpoint returns a
     // masked key, so the client only sends a real key when the user actually changes it.
+    // Stored encrypted at rest; `encrypt` is idempotent on the existing ciphertext.
     .bind(match payload.api_key.as_deref() {
-        Some(k) if !k.is_empty() => k,
-        _ => &existing.api_key,
+        Some(k) if !k.is_empty() => crate::crypto::encrypt(k),
+        _ => existing.api_key.clone(),
     })
     .bind(payload.model.as_deref().unwrap_or(&existing.model))
     .bind(payload.max_tokens.unwrap_or(existing.max_tokens))
@@ -63,7 +64,9 @@ pub async fn update_config(
 /// Mask the API key, keeping only a hint of the last 4 characters.
 /// Returns a JSON value with the masked key and an `api_key_set` flag.
 fn mask_config(config: LLMConfig) -> serde_json::Value {
-    let key = &config.api_key;
+    // Decrypt so the "last 4 chars" hint reflects the real key, not ciphertext.
+    let key = crate::crypto::decrypt(&config.api_key);
+    let key = &key;
     let masked = if key.is_empty() {
         String::new()
     } else if key.len() <= 4 {
@@ -95,7 +98,7 @@ pub async fn test_connection(
     let client = reqwest::Client::new();
     let response = client
         .get(format!("{}/models", config.base_url.trim_end_matches('/')))
-        .header("Authorization", format!("Bearer {}", config.api_key))
+        .header("Authorization", format!("Bearer {}", crate::crypto::decrypt(&config.api_key)))
         .send()
         .await;
 

@@ -11,6 +11,7 @@ export interface DataSource {
   database_name: string;
   username: string;
   status: string;
+  is_default?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -139,8 +140,37 @@ export interface Report {
     data_viz: number;
     total: number;
   } | null;
+  report_filters?: ReportFilter[] | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ReportFilterTarget {
+  datasource_id: number;
+  column: string;
+}
+
+export interface ReportDebugEntry {
+  dataset_id: number;
+  name: string;
+  datasource_id: number;
+  db_type: string;
+  base_sql: string;
+  effective_sql: string;
+  params: unknown[];
+  filter_count: number;
+  row_count?: number | null;
+  duration_ms: number;
+  executed_at: string;
+  error?: string | null;
+}
+
+export interface ReportFilter {
+  key: string;
+  label?: string;
+  op: FilterCondition['op'];
+  value: unknown;
+  targets: ReportFilterTarget[];
 }
 
 export interface ReportConfig {
@@ -181,6 +211,12 @@ export interface CreateReportPayload {
   visualization_intent?: string;
 }
 
+export interface FilterCondition {
+  column: string;
+  op: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'IN' | 'BETWEEN';
+  value: unknown;
+}
+
 export interface ReportDataSource {
   id: number;
   report_id: number;
@@ -190,6 +226,7 @@ export interface ReportDataSource {
   datasource_id: number;
   result_cache?: unknown;
   row_count?: number;
+  filters?: FilterCondition[] | null;
   created_at?: string;
 }
 
@@ -220,6 +257,14 @@ export interface MetricGroup {
 }
 
 // ── Metric Pools ──
+export interface MetricParam {
+  name: string;
+  label?: string;
+  type?: 'text' | 'number' | 'date' | 'daterange' | 'enum';
+  default?: unknown;
+  options?: string[];
+}
+
 export interface MetricPool {
   id: number;
   name: string;
@@ -230,6 +275,7 @@ export interface MetricPool {
   result_cache?: unknown;
   row_count?: number;
   source_pool_id?: number | null;
+  params?: MetricParam[] | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -241,6 +287,7 @@ export interface CreateMetricPayload {
   datasource_id: number;
   group_id?: number | null;
   source_pool_id?: number | null;
+  params?: MetricParam[] | null;
 }
 
 // ── LLM Config ──

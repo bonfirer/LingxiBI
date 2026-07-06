@@ -38,6 +38,9 @@ services:
       DATABASE_URL: mysql://${MYSQL_USER:-aireport}:${MYSQL_PASSWORD:-aireport_local_pw}@db:3306/${MYSQL_DATABASE:-ai_report}
       # Leave empty to have the entrypoint generate & persist a strong secret.
       JWT_SECRET: ${JWT_SECRET:-}
+      # Optional dedicated key for credential encryption-at-rest. If empty, it's
+      # derived from JWT_SECRET.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-*}
     volumes:
       - server_data:/data

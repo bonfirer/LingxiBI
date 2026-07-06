@@ -833,3 +833,106 @@ pub async fn github_callback(
 pub async fn github_enabled() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "enabled": github_oauth_enabled() }))
 }
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    const TEST_SECRET: &str = "test-jwt-secret-at-least-16-chars-long";
+
+    fn session_token(user_id: i32, role: &str) -> String {
+        std::env::set_var("JWT_SECRET", TEST_SECRET);
+        let claims = serde_json::json!({
+            "sub": user_id,
+            "role": role,
+            "exp": chrono::Utc::now().timestamp() + 3600,
+        });
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(TEST_SECRET.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn normalize_role_defaults_to_member() {
+        // Only an exact "admin" grants admin; everything else is a member.
+        assert_eq!(normalize_role(Some("admin")), "admin");
+        assert_eq!(normalize_role(Some("member")), "member");
+        assert_eq!(normalize_role(Some("root")), "member");
+        assert_eq!(normalize_role(Some("ADMIN")), "member");
+        assert_eq!(normalize_role(None), "member");
+    }
+
+    #[test]
+    fn session_token_carries_role() {
+        assert_eq!(validate_session(&session_token(1, "admin")), Ok((1, true)));
+        assert_eq!(validate_session(&session_token(2, "member")), Ok((2, false)));
+        // Any non-admin role resolves to non-admin.
+        assert_eq!(validate_session(&session_token(3, "superuser")), Ok((3, false)));
+    }
+
+    #[test]
+    fn embed_token_is_rejected_as_a_full_session() {
+        std::env::set_var("JWT_SECRET", TEST_SECRET);
+        let embed = create_embed_token(7).unwrap();
+        // Critical: a leaked read-only embed token must never authorize a full
+        // session (and thus never reach admin/mutation routes).
+        assert!(validate_session(&embed).is_err());
+        assert!(validate_token(&embed).is_err());
+    }
+
+    #[test]
+    fn garbage_and_tampered_tokens_rejected() {
+        std::env::set_var("JWT_SECRET", TEST_SECRET);
+        assert!(validate_session("not-a-jwt").is_err());
+        assert!(validate_session("").is_err());
+        let mut tampered = session_token(1, "admin");
+        tampered.push('x'); // corrupt the signature
+        assert!(validate_session(&tampered).is_err());
+    }
+
+    #[test]
+    fn token_signed_with_other_secret_rejected() {
+        std::env::set_var("JWT_SECRET", TEST_SECRET);
+        let claims = serde_json::json!({
+            "sub": 1, "role": "admin", "exp": chrono::Utc::now().timestamp() + 3600,
+        });
+        let forged = jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(b"a-totally-different-secret-value"),
+        )
+        .unwrap();
+        assert!(validate_session(&forged).is_err());
+    }
+
+    #[test]
+    fn non_positive_subject_rejected() {
+        std::env::set_var("JWT_SECRET", TEST_SECRET);
+        let claims = serde_json::json!({
+            "sub": 0, "role": "admin", "exp": chrono::Utc::now().timestamp() + 3600,
+        });
+        let tok = jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(TEST_SECRET.as_bytes()),
+        )
+        .unwrap();
+        assert!(validate_session(&tok).is_err());
+    }
+
+    #[test]
+    fn rate_limiter_locks_out_after_max_attempts() {
+        let user = "ratelimit-test-user-unique";
+        clear_failures(user);
+        assert!(check_rate_limit(user).is_ok());
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            record_failure(user);
+        }
+        assert!(check_rate_limit(user).is_err(), "should lock out after {MAX_FAILED_ATTEMPTS} failures");
+        clear_failures(user);
+        assert!(check_rate_limit(user).is_ok(), "clear_failures should reset the lockout");
+    }
+}

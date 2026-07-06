@@ -90,7 +90,7 @@ Connect MySQL, PostgreSQL, or Oracle, then:
 | 🔗 | **Sharing** | Unguessable share links with publish/draft control |
 | 👥 | **Multi-user & access control** | Admin/member roles; per-user reports, metrics, conversations & alerts; datasource-level access grants |
 | 🌍 | **i18n** | English + Chinese out of the box |
-| 🔐 | **Security** | JWT auth, login rate-limiting, SQL allowlist validator, SSRF protection, security headers |
+| 🔐 | **Security** | JWT auth, login rate-limiting, SQL allowlist validator, SSRF protection, AES-256-GCM encrypted credentials at rest, security headers |
 
 ---
 
@@ -224,6 +224,7 @@ Open the printed URL, create admin, add a data source, configure your LLM in **S
 |----------|-------------|
 | `DATABASE_URL` | Metadata DB connection string |
 | `JWT_SECRET` | Auth token signing key (≥ 16 chars) |
+| `ENCRYPTION_KEY` | Key for credential encryption-at-rest (optional; derived from `JWT_SECRET` if unset) |
 | `CORS_ALLOWED_ORIGIN` | Allowed origin (`*` for dev only) |
 
 > LLM provider, SMTP, and Feishu webhook are configured in-app at runtime (stored in DB, not env vars).
@@ -281,6 +282,7 @@ lingxibi/
 | **Authorization** | Admin/member roles; per-user ownership of reports, metrics, conversations & alerts; datasource-level access grants (server-enforced on every read/query) |
 | **SQL safety** | Lexical allowlist validator (SELECT/SHOW/DESCRIBE/EXPLAIN/CTE only), per-query timeout (30s), row cap (50k) |
 | **SSRF protection** | Feishu webhook URL restricted to official domains only |
+| **Encryption at rest** | Data-source passwords, LLM API key, SMTP password & Feishu secret stored AES-256-GCM encrypted (key from `ENCRYPTION_KEY`, else derived from `JWT_SECRET`) |
 | **Response headers** | `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` |
 | **Secret handling** | Credentials never returned by API; passwords/keys masked in responses |
 
@@ -320,7 +322,7 @@ Data sources are admin-managed. A member cannot see or query a data source until
 - [ ] Embedding-based semantic retrieval for knowledge base & examples
 - [ ] Feishu Bitable (Base) sync
 - [ ] More notification channels (DingTalk, WeChat Work, Slack)
-- [ ] Encryption-at-rest for stored credentials
+- [x] Encryption-at-rest for stored credentials
 - [ ] Multi-arch Docker images (GHCR) on tagged releases
 - [ ] `SECURITY.md` + `CHANGELOG.md`
 - [ ] More chart types & dashboard templates

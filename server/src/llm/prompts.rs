@@ -28,7 +28,8 @@ pub fn chat_system_prompt(knowledge_graph_context: &str, lang: &str) -> String {
     {{
       "sql": "SELECT ...",
       "datasource_id": 1,
-      "label": "A short label for the result"
+      "label": "A short label for the result",
+      "params": []
     }}
   ]
 }}
@@ -51,7 +52,20 @@ pub fn chat_system_prompt(knowledge_graph_context: &str, lang: &str) -> String {
 11. When computing percentages or ratios, ROUND to 2 decimal places.
 12. Pay attention to the Column Statistics section — it shows actual values for enum-like fields. Use these EXACT values in WHERE clauses (e.g. if status values are [active, inactive], don't guess other values).
 13. When filtering by a column, check its sample values first to ensure correct spelling and casing.
-14. Treat the Metrics Library as authoritative business knowledge: when the user's question matches or relates to a curated metric, reuse that metric's SQL and its definition of the business term rather than inventing a new approach. Keep terminology and calculations consistent with it."#,
+14. Treat the Metrics Library as authoritative business knowledge: when the user's question matches or relates to a curated metric, reuse that metric's SQL and its definition of the business term rather than inventing a new approach. Keep terminology and calculations consistent with it.
+
+## Parameterized (reusable) metrics
+By DEFAULT, write concrete SQL for one-off questions (leave "params": []).
+BUT when the user is defining a REUSABLE metric or asks for configurable/adjustable filters (e.g. "make a metric I can filter by date and region", "让我能按时间和地区筛选"), parameterize the query using this EXACT placeholder syntax:
+- `[[ ... {{{{name}}}} ... ]]` — an OPTIONAL block, included only when `name` has a value, otherwise dropped. PREFER this for filters, so the query still returns all data by default.
+- `{{{{name}}}}` — a REQUIRED placeholder, always substituted (use rarely; give it a default).
+Rules for parameterizing:
+- If the query has no WHERE, add `WHERE 1=1` then append `[[ AND ... ]]` blocks.
+- Prefer turning hard-coded filter values into parameters (e.g. `region = 'east'` -> `[[ AND region = {{{{region}}}} ]]`).
+- Each placeholder is a single scalar; for a date range use two params ({{{{start_date}}}} and {{{{end_date}}}}).
+- For EVERY placeholder, add an entry to that query's "params" array so the preview can run and the metric can be saved:
+  "params": [ {{ "name": "region", "label": "地区", "type": "text", "default": "" }}, {{ "name": "start_date", "label": "开始日期", "type": "date", "default": "" }} ]
+  "type" is one of: "text", "number", "date", "enum". "default" may be "" (empty). Each "name" must match a `{{{{name}}}}` in the SQL."#,
         lang_instruction, knowledge_graph_context
     )
 }
@@ -379,5 +393,147 @@ pub fn alert_template_prompt(metric_context: &str, condition_desc: &str, lang: &
 Example shape:
 {{"subject_template":"[预警] {{{{metric_name}}}} 已达 {{{{value}}}}","body_template":"<div style=\"...\">...{{{{table}}}}...</div>"}}"#,
         lang_instruction, metric_context, condition_desc
+    )
+}
+
+
+/// System prompt that turns a natural-language request into structured filter
+/// conditions for a single dataset. The model must only use the listed columns
+/// and the allowed operators, and must output a bare JSON array (no prose).
+///
+/// `columns_context` describes the available columns (names + sample values),
+/// `today` is the current date so relative ranges ("last 30 days") can be
+/// resolved, and `lang` is the UI language for any labels.
+pub fn filter_suggest_prompt(columns_context: &str, today: &str, lang: &str) -> String {
+    let _ = lang; // Values are data, not prose; language only matters for free text.
+    format!(
+        r#"You translate a user's natural-language request into structured SQL filter conditions for ONE dataset.
+
+## Today's date
+{today}
+
+## Available columns (only these may be used)
+These are the dataset's OUTPUT columns; each is shown with an example value:
+{columns_context}
+
+## Allowed operators
+"=", "!=", ">", ">=", "<", "<=", "LIKE", "IN", "BETWEEN"
+
+## Output format
+Return ONLY a JSON array (no markdown, no prose) of conditions:
+[
+  {{ "column": "<one of the listed columns>", "op": "<allowed operator>", "value": <value> }}
+]
+
+Value rules:
+- Scalar (string or number) for =, !=, >, >=, <, <=, LIKE.
+- Match the data's actual format: reuse the EXACT spelling, casing, and language of the example values. Do NOT translate, reword, or reformat a categorical value (e.g. if the example is "华东", output "华东", not "East China" or "华东地区").
+- Use "=" or "IN" for exact categorical matches; use "LIKE" only for genuine partial/fuzzy text matching, with SQL wildcards, e.g. "%<term>%".
+- For IN, "value" is an array, e.g. ["<val1>","<val2>"].
+- For BETWEEN, "value" is a two-element array [min, max], e.g. ["2024-01-01","2024-12-31"].
+- For date ranges, prefer BETWEEN or >=/<= using ISO dates (YYYY-MM-DD), resolved against today's date.
+
+Rules:
+1. Use ONLY the listed columns. If the request references something with no matching column, omit that condition — never invent a column name.
+2. Use ONLY the allowed operators.
+3. When the example value looks numeric, output a number (not a quoted string); when it looks like text or a date, output a string.
+4. If nothing in the request maps to a condition, return an empty array: []
+5. Output the JSON array and nothing else."#
+    )
+}
+
+
+/// System prompt that rewrites a metric's SQL to add parameter placeholders for
+/// the conditions a user would likely want to filter on (dates, regions,
+/// categories, thresholds). The model returns JSON `{ "sql", "params" }`.
+///
+/// Placeholder conventions (must be followed exactly):
+/// - `[[ ... {{name}} ... ]]` — optional block, dropped when the value is empty
+///   (PREFERRED for filters, so the metric still returns all data by default).
+/// - `{{name}}` — required, always substituted.
+pub fn metric_parameterize_prompt(lang: &str) -> String {
+    let lang_line = if lang == "en" {
+        "Write parameter labels in English."
+    } else {
+        "参数的 label 用简体中文。"
+    };
+    format!(
+        r#"You add query-condition parameters to an existing read-only SQL query so it can be filtered at runtime, WITHOUT changing what it fundamentally computes.
+
+## Placeholder syntax (follow EXACTLY)
+- `[[ ... {{{{name}}}} ... ]]` — an OPTIONAL block. It is included only when `name` has a value, otherwise the whole block is dropped. PREFER this for filters, so the query still returns all data when no value is given.
+- `{{{{name}}}}` — a REQUIRED placeholder, always substituted. Use only when the query cannot run without it.
+
+## How to parameterize
+1. Identify the conditions a user would plausibly want to control: date/time ranges, region/category/status filters, numeric thresholds.
+2. Add them as OPTIONAL blocks in the WHERE clause. If the query has no WHERE, add `WHERE 1=1` first, then append `[[ AND ... ]]` blocks.
+3. Prefer wrapping EXISTING hard-coded filter values into parameters (e.g. `WHERE region = 'east'` -> `[[ AND region = {{{{region}}}} ]]` with default "east").
+4. Keep the SELECT list, joins, grouping, and ordering unchanged. Do NOT alter aggregation logic.
+5. Every placeholder is a single scalar value. For a date range use two params, e.g. `[[ AND ts >= {{{{start_date}}}} ]] [[ AND ts <= {{{{end_date}}}} ]]`.
+6. The result MUST remain a read-only SELECT/WITH query.
+
+## Language
+{}
+
+## Output format
+Return ONLY a JSON object (no markdown fences, no commentary):
+{{
+  "sql": "the rewritten SQL with placeholders",
+  "params": [
+    {{ "name": "region", "label": "地区", "type": "text", "default": "" }},
+    {{ "name": "start_date", "label": "开始日期", "type": "date", "default": "" }}
+  ]
+}}
+- "name" must match the `{{{{name}}}}` used in the SQL, be a valid identifier, and be unique.
+- "type" is one of: "text", "number", "date", "enum".
+- "default" is optional; use "" when there is no sensible default.
+- If nothing is worth parameterizing, return the original SQL unchanged with "params": []."#,
+        lang_line
+    )
+}
+
+
+/// System prompt that generates a complete parameterized metric from a natural
+/// language description plus the datasource schema. Returns JSON
+/// `{ "name", "sql", "params" }`.
+pub fn metric_generate_prompt(schema_context: &str, lang: &str) -> String {
+    let lang_line = if lang == "en" {
+        "Write the metric name and parameter labels in English."
+    } else {
+        "指标名称（name）和参数 label 用简体中文。"
+    };
+    format!(
+        r#"You are a data analyst. Turn the user's description into a single, ready-to-use METRIC: one read-only SQL query, parameterized so the important conditions can be filtered at runtime.
+
+## Database schema (use EXACT table and column names from here)
+{}
+
+## SQL rules
+1. Write ONE read-only query: SELECT / WITH only — never a mutation.
+2. Use only tables/columns that exist in the schema above.
+3. Give aggregates meaningful aliases; ORDER BY a sensible column; for percentages ROUND to 2 decimals.
+
+## Parameterization (follow the syntax EXACTLY)
+- `[[ ... {{{{name}}}} ... ]]` — an OPTIONAL block, included only when `name` has a value, otherwise dropped. PREFER this for filters so the metric returns all data by default.
+- `{{{{name}}}}` — a REQUIRED placeholder, always substituted (use rarely).
+- Add optional blocks for conditions a user would want to control (date/time ranges, region/category/status, thresholds). If there is no WHERE, start with `WHERE 1=1` then append `[[ AND ... ]]` blocks.
+- Each placeholder is a single scalar. For a date range use two params (e.g. {{{{start_date}}}} and {{{{end_date}}}}).
+
+## Language
+{}
+
+## Output format
+Return ONLY a JSON object (no markdown fences, no commentary):
+{{
+  "name": "a concise metric name",
+  "sql": "the parameterized SQL",
+  "params": [
+    {{ "name": "start_date", "label": "开始日期", "type": "date", "default": "" }}
+  ]
+}}
+- Each "name" in params must match a `{{{{name}}}}` used in the SQL, be a valid identifier, and be unique.
+- "type" is one of: "text", "number", "date", "enum". "default" is optional (use "").
+- If the description needs no parameters, return "params": []."#,
+        schema_context, lang_line
     )
 }

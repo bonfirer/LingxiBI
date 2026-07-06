@@ -129,9 +129,10 @@ pub async fn send_card(cfg: &FeishuConfig, card: Value) -> Result<(), String> {
     });
 
     // Attach signature fields when a secret is configured.
-    if !cfg.secret.trim().is_empty() {
+    let secret = crate::crypto::decrypt(&cfg.secret);
+    if !secret.trim().is_empty() {
         let timestamp = chrono::Utc::now().timestamp();
-        let signature = sign(timestamp, cfg.secret.trim())?;
+        let signature = sign(timestamp, secret.trim())?;
         body["timestamp"] = json!(timestamp.to_string());
         body["sign"] = json!(signature);
     }

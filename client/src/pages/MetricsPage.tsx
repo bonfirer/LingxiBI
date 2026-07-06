@@ -14,6 +14,7 @@ import {
   Check,
   Play,
   Clock,
+  Sparkle,
 } from '@phosphor-icons/react';
 import {
   metricsApi,
@@ -26,8 +27,24 @@ import {
 } from '../lib/api';
 import { PageHeader, ErrorBanner, EmptyState } from '../components/ui';
 
+/** Extract distinct `{{name}}` placeholder names from metric SQL (also matches
+ *  placeholders inside `[[ ]]` optional blocks). */
+function extractParamNames(sql: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const re = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sql)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      names.push(m[1]);
+    }
+  }
+  return names;
+}
+
 export default function MetricsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [metrics, setMetrics] = useState<MetricPool[]>([]);
   const [groups, setGroups] = useState<MetricGroup[]>([]);
@@ -43,6 +60,15 @@ export default function MetricsPage() {
   const [nmSql, setNmSql] = useState('');
   const [nmDsId, setNmDsId] = useState<number | ''>('');
   const [nmGroupId, setNmGroupId] = useState<number | ''>('');
+  // Default values for {{placeholders}} detected in the new metric's SQL.
+  const [nmParamDefaults, setNmParamDefaults] = useState<Record<string, string>>({});
+  const [nmAiLoading, setNmAiLoading] = useState(false);
+  // Natural-language description → AI-generated parameterized metric.
+  const [nmDescription, setNmDescription] = useState('');
+  const [nmGenLoading, setNmGenLoading] = useState(false);
+  // AI-suggested params for the metric being edited (used on SQL save).
+  const [editAiLoading, setEditAiLoading] = useState(false);
+  const [editParams, setEditParams] = useState<import('../lib/api').MetricParam[] | null>(null);
   const [nmSaving, setNmSaving] = useState(false);
   const [nmTesting, setNmTesting] = useState(false);
   const [nmTestResult, setNmTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -158,7 +184,10 @@ export default function MetricsPage() {
   const openNewMetric = () => {
     setNmName('');
     setNmSql('');
-    setNmDsId(datasources[0]?.id ?? '');
+    setNmDescription('');
+    setNmParamDefaults({});
+    // Prefer the locked default datasource, falling back to the first one.
+    setNmDsId((datasources.find((d) => d.is_default) ?? datasources[0])?.id ?? '');
     setNmGroupId('');
     setNmTestResult(null);
     setShowNewMetric(true);
@@ -178,15 +207,77 @@ export default function MetricsPage() {
     }
   };
 
+  // AI: generate a full parameterized metric from a description + schema.
+  const handleAiGenerate = async () => {
+    if (!nmDescription.trim() || !nmDsId || nmGenLoading) return;
+    setNmGenLoading(true);
+    setNmTestResult(null);
+    try {
+      const res = await metricsApi.aiGenerate(nmDsId as number, nmDescription.trim(), i18n.language);
+      setNmSql(res.sql);
+      if (!nmName.trim() && res.name) setNmName(res.name);
+      const defaults: Record<string, string> = {};
+      for (const p of res.params ?? []) {
+        if (p.default != null && p.default !== '') defaults[p.name] = String(p.default);
+      }
+      setNmParamDefaults(defaults);
+    } catch (e) {
+      setNmTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setNmGenLoading(false);
+    }
+  };
+
+  // AI: rewrite the new metric's SQL with placeholders and prefill defaults.
+  const handleAiParameterizeNew = async () => {
+    if (!nmSql.trim() || nmAiLoading) return;
+    setNmAiLoading(true);
+    setNmTestResult(null);
+    try {
+      const res = await metricsApi.aiParameterize(nmSql.trim(), nmName.trim() || undefined, i18n.language);
+      setNmSql(res.sql);
+      const defaults: Record<string, string> = {};
+      for (const p of res.params ?? []) {
+        if (p.default != null && p.default !== '') defaults[p.name] = String(p.default);
+      }
+      setNmParamDefaults(defaults);
+    } catch (e) {
+      setNmTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setNmAiLoading(false);
+    }
+  };
+
+  // AI: rewrite the edited metric's SQL with placeholders.
+  const handleAiParameterizeEdit = async () => {
+    if (!editSql.trim() || editAiLoading) return;
+    setEditAiLoading(true);
+    try {
+      const res = await metricsApi.aiParameterize(editSql.trim(), selectedMetric?.name, i18n.language);
+      setEditSql(res.sql);
+      setEditParams(res.params ?? null);
+    } catch (e) {
+      setSqlError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditAiLoading(false);
+    }
+  };
+
   const handleCreateMetric = async () => {
     if (!nmName.trim() || !nmSql.trim() || !nmDsId) return;
     setNmSaving(true);
     try {
+      const paramNames = extractParamNames(nmSql);
+      const params = paramNames.map((name) => {
+        const def = nmParamDefaults[name]?.trim();
+        return def ? { name, default: def } : { name };
+      });
       const created = await metricsApi.create({
         name: nmName.trim(),
         sql_query: nmSql.trim(),
         datasource_id: nmDsId as number,
         group_id: nmGroupId === '' ? null : (nmGroupId as number),
+        params: params.length ? params : null,
       });
       setShowNewMetric(false);
       await fetchAllAndNotify();
@@ -244,7 +335,22 @@ export default function MetricsPage() {
   const handleSaveSql = async () => {
     if (!selectedMetric || !editSql.trim()) { setEditingSql(false); return; }
     try {
-      await metricsApi.update(selectedMetric.id, { sql_query: editSql.trim() });
+      // Keep declared params in sync with the placeholders in the edited SQL.
+      // Prefer AI-suggested defs (with labels/defaults); otherwise derive from
+      // the placeholders, preserving any existing defaults.
+      const names = extractParamNames(editSql);
+      let params: import('../lib/api').MetricParam[];
+      if (editParams) {
+        params = editParams.filter((p) => names.includes(p.name));
+      } else {
+        const existing = new Map((selectedMetric.params ?? []).map((p) => [p.name, p]));
+        params = names.map((n) => existing.get(n) ?? { name: n });
+      }
+      await metricsApi.update(selectedMetric.id, {
+        sql_query: editSql.trim(),
+        params: params.length ? params : null,
+      });
+      setEditParams(null);
       setEditingSql(false);
       await fetchAllAndNotify();
     } catch (e) {
@@ -452,6 +558,29 @@ export default function MetricsPage() {
                   </div>
                 </div>
 
+                {/* AI: describe the metric in natural language → generate SQL + params */}
+                <div>
+                  <label className="text-[10px] text-gray-500 block mb-1">{t('metrics.params.describe')}</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={nmDescription}
+                      onChange={(e) => setNmDescription(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleAiGenerate(); }}
+                      placeholder={t('metrics.params.describePlaceholder')}
+                      className="flex-1 bg-obsidian-950 border border-obsidian-700 rounded-lg px-3 py-2 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium"
+                    />
+                    <button
+                      onClick={handleAiGenerate}
+                      disabled={!nmDescription.trim() || !nmDsId || nmGenLoading}
+                      className="flex items-center gap-1 text-[11px] text-amber-500/90 hover:text-amber-400 border border-amber-500/30 px-3 py-2 rounded-lg transition-premium disabled:opacity-40 flex-shrink-0"
+                    >
+                      <Sparkle size={11} />
+                      {nmGenLoading ? t('metrics.params.aiThinking') : t('metrics.params.generate')}
+                    </button>
+                  </div>
+                </div>
+
                 {/* SQL */}
                 <div>
                   <label className="text-[10px] text-gray-500 block mb-1">SQL</label>
@@ -462,7 +591,30 @@ export default function MetricsPage() {
                     placeholder="SELECT ..."
                     className="w-full bg-obsidian-950 border border-obsidian-700 rounded-lg px-3 py-2 text-[11px] text-data-green font-mono focus:outline-none focus:border-amber-500/50 transition-premium resize-y"
                   />
+                  <p className="text-[9px] text-gray-600 mt-1">{t('metrics.params.sqlHint', { name: '{{name}}' })}</p>
                 </div>
+
+                {/* Detected parameters — set an optional default for each */}
+                {extractParamNames(nmSql).length > 0 && (
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">{t('metrics.params.title')}</label>
+                    <div className="space-y-1.5">
+                      {extractParamNames(nmSql).map((name) => (
+                        <div key={name} className="flex items-center gap-2">
+                          <code className="text-[11px] text-amber-500 font-mono min-w-[110px]">{`{{${name}}}`}</code>
+                          <input
+                            type="text"
+                            value={nmParamDefaults[name] ?? ''}
+                            onChange={(e) => setNmParamDefaults((prev) => ({ ...prev, [name]: e.target.value }))}
+                            placeholder={t('metrics.params.defaultPlaceholder')}
+                            className="flex-1 bg-obsidian-950 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[9px] text-gray-600 mt-1">{t('metrics.params.hint')}</p>
+                  </div>
+                )}
 
                 {/* Test result */}
                 {nmTestResult && (
@@ -477,14 +629,25 @@ export default function MetricsPage() {
               </div>
 
               <div className="flex items-center justify-between px-5 py-3 border-t border-obsidian-700 flex-shrink-0">
-                <button
-                  onClick={handleTestMetricSql}
-                  disabled={!nmSql.trim() || !nmDsId || nmTesting}
-                  className="flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 border border-obsidian-700 px-3 py-1.5 rounded-md transition-premium disabled:opacity-40"
-                >
-                  <Play size={11} weight="fill" />
-                  {nmTesting ? '...' : t('metrics.test')}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTestMetricSql}
+                    disabled={!nmSql.trim() || !nmDsId || nmTesting}
+                    className="flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 border border-obsidian-700 px-3 py-1.5 rounded-md transition-premium disabled:opacity-40"
+                  >
+                    <Play size={11} weight="fill" />
+                    {nmTesting ? '...' : t('metrics.test')}
+                  </button>
+                  <button
+                    onClick={handleAiParameterizeNew}
+                    disabled={!nmSql.trim() || nmAiLoading}
+                    className="flex items-center gap-1 text-[11px] text-amber-500/90 hover:text-amber-400 border border-amber-500/30 px-3 py-1.5 rounded-md transition-premium disabled:opacity-40"
+                    title={t('metrics.params.aiHint')}
+                  >
+                    <Sparkle size={11} />
+                    {nmAiLoading ? t('metrics.params.aiThinking') : t('metrics.params.ai')}
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowNewMetric(false)}
@@ -615,7 +778,7 @@ export default function MetricsPage() {
               </button>
               {!editingSql && (
                 <button
-                  onClick={() => { setEditSql(selectedMetric?.sql_query || ''); setEditingSql(true); }}
+                  onClick={() => { setEditSql(selectedMetric?.sql_query || ''); setEditParams(null); setEditingSql(true); }}
                   className="flex items-center gap-1 text-[9px] text-gray-500 hover:text-gray-300 px-1.5 py-0.5 rounded transition-premium"
                 >
                   <PencilSimple size={10} />
@@ -642,12 +805,21 @@ export default function MetricsPage() {
                 className="w-full bg-obsidian-950 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-data-green font-mono focus:outline-none focus:border-amber-500/50 transition-premium resize-y"
                 placeholder="Ctrl+Enter to run"
               />
+              <p className="text-[9px] text-gray-600 mt-1.5">{t('metrics.params.sqlHint', { name: '{{name}}' })}</p>
               <div className="flex items-center gap-2 mt-2">
                 <button onClick={handleSaveAndRun} className="flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 font-medium">
                   <Check size={10} /> {t('metrics.saveAndRun')}
                 </button>
                 <button onClick={handleSaveSql} className="text-[10px] text-gray-400 hover:text-gray-200">{t('common.save')}</button>
-                <button onClick={() => setEditingSql(false)} className="text-[10px] text-gray-500 hover:text-gray-300">{t('common.cancel')}</button>
+                <button
+                  onClick={handleAiParameterizeEdit}
+                  disabled={editAiLoading || !editSql.trim()}
+                  className="flex items-center gap-1 text-[10px] text-amber-500/90 hover:text-amber-400 disabled:opacity-40"
+                  title={t('metrics.params.aiHint')}
+                >
+                  <Sparkle size={10} /> {editAiLoading ? t('metrics.params.aiThinking') : t('metrics.params.ai')}
+                </button>
+                <button onClick={() => { setEditingSql(false); setEditParams(null); }} className="text-[10px] text-gray-500 hover:text-gray-300">{t('common.cancel')}</button>
               </div>
             </div>
           ) : (

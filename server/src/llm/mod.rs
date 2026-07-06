@@ -38,6 +38,12 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
-        Self { base_url: base_url.trim_end_matches('/').to_string(), api_key, model }
+        // The stored key is encrypted at rest; decrypt it here so every caller
+        // gets a ready-to-use plaintext key without touching credentials.
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key: crate::crypto::decrypt(&api_key),
+            model,
+        }
     }
 }

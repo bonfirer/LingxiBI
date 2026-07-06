@@ -4,13 +4,16 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft, Sparkle, PaperPlaneRight, ShareNetwork, Upload,
   Plus, Database, Star, X, Stop, Clock, ArrowClockwise, CaretDown, ArrowCounterClockwise,
-  Desktop, DeviceMobile, ClockCounterClockwise, Trash, Palette, Lightbulb, ChatCircle,
+  Desktop, DeviceMobile, ClockCounterClockwise, Trash, Palette, Lightbulb, ChatCircle, Funnel, Bug,
 } from '@phosphor-icons/react';
 import {
   reportsApi, metricsApi, metricGroupsApi, reportThemesApi, reportSummaryApi,
   type Report, type ReportDataSource, type MetricPool, type MetricGroup, type ReportTheme, type DataSummary,
 } from '../lib/api';
 import { ErrorBanner } from '../components/ui';
+import { DatasourceFilters } from '../components/DatasourceFilters';
+import { ReportFilters } from '../components/ReportFilters';
+import { ReportDebugPanel } from '../components/ReportDebugPanel';
 import { fetchEmbedToken, getCachedEmbedToken } from '../lib/embedToken';
 import { toast } from '../stores/toastStore';
 
@@ -38,6 +41,8 @@ export default function ReportDetailPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [selectedStyleKey, setSelectedStyleKey] = useState<string | null>(null);
   const [showDsModal, setShowDsModal] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [versions, setVersions] = useState<{ id: number; version: number; prompt: string | null; style_key: string | null; created_at: string | null }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -466,6 +471,19 @@ export default function ReportDetailPage() {
           <button onClick={() => setShowDsModal(true)} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
             <Database size={11} /> {t('reportDetail.dataSources')} ({datasources.length})
           </button>
+          {/* Report-level global filters */}
+          <button
+            onClick={() => setShowFilters(true)}
+            className={`flex items-center gap-1 text-[10px] border px-2.5 py-1.5 rounded-md transition-premium ${
+              (report.report_filters?.length ?? 0) > 0
+                ? 'text-amber-500/90 border-amber-500/30 hover:text-amber-400'
+                : 'text-gray-400 border-obsidian-700 hover:text-gray-200'
+            }`}
+          >
+            <Funnel size={11} weight={(report.report_filters?.length ?? 0) > 0 ? 'fill' : 'regular'} />
+            {t('reportDetail.globalFilters.button')}
+            {(report.report_filters?.length ?? 0) > 0 && ` (${report.report_filters!.length})`}
+          </button>
           {/* Refresh interval */}
           <RefreshIntervalPicker value={refreshInterval} onChange={(v) => { setRefreshInterval(v); if (report) reportsApi.updateRefreshInterval(report.id, v).catch(() => {}); }} t={t} />
           {/* Manual refresh */}
@@ -476,6 +494,19 @@ export default function ReportDetailPage() {
             aria-label={t('common.refresh')}
           >
             <ArrowClockwise size={11} />
+          </button>
+          {/* Debug SQL toggle */}
+          <button
+            onClick={() => setShowDebug((v) => !v)}
+            className={`flex items-center gap-1 text-[10px] border px-2 py-1.5 rounded-md transition-premium ${
+              showDebug
+                ? 'text-amber-500/90 border-amber-500/30 hover:text-amber-400'
+                : 'text-gray-400 border-obsidian-700 hover:text-gray-200'
+            }`}
+            title={t('reportDetail.debug.button')}
+            aria-label={t('reportDetail.debug.button')}
+          >
+            <Bug size={11} weight={showDebug ? 'fill' : 'regular'} /> {t('reportDetail.debug.button')}
           </button>
           <button onClick={handlePublish} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
             <Upload size={11} /> {report.status === 'published' ? t('reportDetail.unpublish') : t('reportDetail.publish')}
@@ -794,6 +825,11 @@ export default function ReportDetailPage() {
         </div>{/* close order-1 main preview */}
       </div>
 
+      {/* ── Debug SQL panel (below the report, only when toggled on) ── */}
+      {showDebug && report && (
+        <ReportDebugPanel reportId={report.id} onClose={() => setShowDebug(false)} />
+      )}
+
       {/* ── AI Chat Bar (bottom) with Dock-style selector ── */}
       <div className="flex-shrink-0 border-t border-obsidian-700 px-5 py-3 bg-obsidian-900 relative">
         <div className="flex items-center gap-2 max-w-4xl mx-auto">
@@ -970,6 +1006,22 @@ export default function ReportDetailPage() {
         {aiLoading && <p className="text-center text-[10px] text-amber-500/60 mt-1.5">{t('reportDetail.aiGenerating')}</p>}
       </div>
 
+      {/* ── Report-level global filters ── */}
+      {showFilters && report && (
+        <ReportFilters
+          report={report}
+          datasources={datasources}
+          onClose={() => setShowFilters(false)}
+          onApplied={(updated) => {
+            setReport(updated);
+            setShowFilters(false);
+            if (iframeRef.current && id) {
+              iframeRef.current.src = withToken(`/api/reports/${id}/html?t=${Date.now()}`);
+            }
+          }}
+        />
+      )}
+
       {/* ── Datasource Modal ── */}
       {showDsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowDsModal(false)}>
@@ -985,19 +1037,28 @@ export default function ReportDetailPage() {
                   <span className="text-[9px] text-gray-500 uppercase tracking-wide font-medium">{t('reportDetail.currentData')}</span>
                   <div className="mt-1.5 space-y-1">
                     {datasources.map((ds) => (
-                      <div key={ds.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-obsidian-800 border border-obsidian-700 group">
-                        <Database size={12} className="text-data-green" />
-                        <span className="text-xs text-gray-300 flex-1 truncate">{ds.name}</span>
-                        <span className="text-[9px] text-gray-600">{ds.row_count ?? 0} rows</span>
-                        <button
-                          onClick={async () => {
-                            await reportsApi.removeDatasource(report!.id, ds.id).catch(() => {});
-                            setDatasources((prev) => prev.filter((d) => d.id !== ds.id));
-                          }}
-                          className="text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-premium flex-shrink-0"
-                        >
-                          <X size={12} />
-                        </button>
+                      <div key={ds.id} className="px-3 py-2 rounded-lg bg-obsidian-800 border border-obsidian-700 group">
+                        <div className="flex items-center gap-2">
+                          <Database size={12} className="text-data-green" />
+                          <span className="text-xs text-gray-300 flex-1 truncate">{ds.name}</span>
+                          <span className="text-[9px] text-gray-600">{ds.row_count ?? 0} rows</span>
+                          <button
+                            onClick={async () => {
+                              await reportsApi.removeDatasource(report!.id, ds.id).catch(() => {});
+                              setDatasources((prev) => prev.filter((d) => d.id !== ds.id));
+                            }}
+                            className="text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-premium flex-shrink-0"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                        <DatasourceFilters
+                          reportId={report!.id}
+                          ds={ds}
+                          onUpdated={(updated) =>
+                            setDatasources((prev) => prev.map((d) => (d.id === updated.id ? updated : d)))
+                          }
+                        />
                       </div>
                     ))}
                   </div>
