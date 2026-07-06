@@ -708,7 +708,9 @@ export default function ReportDetailPage() {
                           setCompareVersionId(null);
                           const fresh = await reportsApi.get(report.id);
                           setReport(fresh);
-                          refreshVersion(report.id);
+                          await refreshVersion(report.id);
+                          // After rollback the displayed content matches the restored version
+                          setCurrentVersion(v.version);
                           if (iframeRef.current) iframeRef.current.src = withToken(`/api/reports/${report.id}/html?t=${Date.now()}`);
                           toast.success(t('reportDetail.versionRestored'));
                         }}
