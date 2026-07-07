@@ -271,7 +271,7 @@ export default function AIPanel() {
   };
 
   return (
-    <aside className="w-[260px] bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0">
+    <aside className="w-[260px] h-full bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-obsidian-700">
         <div className="flex items-center gap-2">

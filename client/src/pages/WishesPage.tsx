@@ -84,7 +84,7 @@ export default function WishesPage() {
   };
 
   return (
-    <div className="p-6 w-full max-w-6xl mx-auto">
+    <div className="p-4 md:p-6 w-full max-w-6xl mx-auto">
       <PageHeader
         title={t('wishes.title')}
         description={t('wishes.description')}

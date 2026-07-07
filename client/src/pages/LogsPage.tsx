@@ -71,7 +71,7 @@ export default function LogsPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       <PageHeader
         title={t('logs.title')}
         description={t('logs.description')}

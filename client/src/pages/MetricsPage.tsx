@@ -417,7 +417,7 @@ export default function MetricsPage() {
   // ── No metric selected ──
   if (!selectedId) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <PageHeader
           title={t('metrics.title')}
           description={t('metrics.description')}
@@ -697,7 +697,7 @@ export default function MetricsPage() {
 
   // ── Metric detail view ──
   return (
-    <div className="p-6 h-full flex flex-col">
+    <div className="p-4 md:p-6 h-full flex flex-col">
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {/* Header */}

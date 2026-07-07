@@ -12,6 +12,7 @@ import {
   ChartBar,
   Trash,
   X,
+  ListBullets,
 } from '@phosphor-icons/react';
 import {
   datasourcesApi,
@@ -54,6 +55,8 @@ export default function AssetPanel() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
+  // Mobile: the asset panel is a slide-in drawer toggled by a floating button.
+  const [open, setOpen] = useState(false);
 
   const path = location.pathname;
   const section = path.startsWith('/datasources')
@@ -66,16 +69,62 @@ export default function AssetPanel() {
           ? 'conversations'
           : 'default';
 
+  // Close the drawer on navigation so a selection reveals the content.
+  const nav = (p: string) => { navigate(p); setOpen(false); };
+
+  const body = (
+    <div className="px-2.5 pb-2.5 flex-1 overflow-y-auto scrollbar-thin">
+      {section === 'datasources' && <DataSourcesKGPanel t={t} navigate={nav} />}
+      {section === 'reports' && <ReportsPanel t={t} navigate={nav} />}
+      {section === 'metrics' && <MetricsPanel t={t} navigate={nav} />}
+      {section === 'conversations' && <ConversationsPanel t={t} />}
+      {section === 'default' && <ReportsPanel t={t} navigate={nav} />}
+    </div>
+  );
+
   return (
-    <aside className="w-[190px] bg-obsidian-900 border-r border-obsidian-700 flex flex-col flex-shrink-0 overflow-hidden">
-      <div className="px-2.5 pb-2.5 flex-1 overflow-y-auto scrollbar-thin">
-        {section === 'datasources' && <DataSourcesKGPanel t={t} navigate={navigate} />}
-        {section === 'reports' && <ReportsPanel t={t} navigate={navigate} />}
-        {section === 'metrics' && <MetricsPanel t={t} navigate={navigate} />}
-        {section === 'conversations' && <ConversationsPanel t={t} />}
-        {section === 'default' && <ReportsPanel t={t} navigate={navigate} />}
-      </div>
-    </aside>
+    <>
+      {/* Desktop: static side panel */}
+      <aside className="hidden md:flex w-[190px] bg-obsidian-900 border-r border-obsidian-700 flex-col flex-shrink-0 overflow-hidden">
+        {body}
+      </aside>
+
+      {/* Mobile: floating toggle button (sits above the bottom nav) */}
+      <button
+        onClick={() => setOpen(true)}
+        className="md:hidden fixed bottom-[68px] right-4 z-40 w-11 h-11 rounded-full bg-amber-500 text-[#08080c] shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+        aria-label={t('assetPanel.browse')}
+        title={t('assetPanel.browse')}
+      >
+        <ListBullets size={20} weight="bold" />
+      </button>
+
+      {/* Mobile: slide-in drawer */}
+      {open && (
+        <div
+          className="md:hidden fixed inset-0 z-[60] bg-black/60"
+          onClick={() => setOpen(false)}
+        />
+      )}
+      <aside
+        className={`
+          md:hidden fixed top-0 bottom-14 left-0 z-[70] w-64 bg-obsidian-900 border-r border-obsidian-700
+          flex flex-col overflow-hidden transform transition-transform duration-200
+          ${open ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        <div className="flex items-center justify-end px-2 py-2 border-b border-obsidian-700 flex-shrink-0">
+          <button
+            onClick={() => setOpen(false)}
+            className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-gray-300 rounded-md hover:bg-obsidian-800"
+            aria-label={t('common.close')}
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {body}
+      </aside>
+    </>
   );
 }
 

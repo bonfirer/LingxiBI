@@ -17,6 +17,7 @@ import {
   Stop,
   ChartBar,
   MagnifyingGlass,
+  List,
 } from '@phosphor-icons/react';
 import { useWebSocket, type WSMessage } from '../hooks/useWebSocket';
 import { conversationsApi, datasourcesApi, queryApi, metricsApi, metricGroupsApi, type Conversation, type Message, type DataSource, type MetricGroup, type MetricPool, type MetricParam } from '../lib/api';
@@ -107,6 +108,8 @@ export default function ConversationsPage() {
   const [metrics, setMetrics] = useState<MetricPool[]>([]);
   const [showMetricsPicker, setShowMetricsPicker] = useState(false);
   const [metricSearch, setMetricSearch] = useState('');
+  // Mobile: the conversation list is an overlay drawer toggled by a button.
+  const [showList, setShowList] = useState(false);
 
   useEffect(() => {
     fetchConversations();
@@ -415,9 +418,23 @@ export default function ConversationsPage() {
   const totalFilteredMetrics = metricGroups.reduce((n, g) => n + g.items.length, 0);
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex relative">
+      {/* Mobile overlay when the conversation list drawer is open */}
+      {showList && (
+        <div
+          className="md:hidden absolute inset-0 z-30 bg-black/60"
+          onClick={() => setShowList(false)}
+        />
+      )}
       {/* Conversation List Sidebar */}
-      <aside className="w-56 border-r border-obsidian-700 flex flex-col flex-shrink-0 bg-obsidian-950/50">
+      <aside
+        className={`
+          absolute md:static inset-y-0 left-0 z-40 w-64 md:w-56
+          border-r border-obsidian-700 flex flex-col flex-shrink-0 bg-obsidian-950
+          transform transition-transform duration-200 md:transform-none
+          ${showList ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}
+      >
         <div className="px-3 py-3 border-b border-obsidian-700">
           <button
             onClick={handleNewConv}
@@ -442,7 +459,7 @@ export default function ConversationsPage() {
               }`}
             >
               <button
-                onClick={() => setActiveId(c.id)}
+                onClick={() => { setActiveId(c.id); setShowList(false); }}
                 className={`flex-1 text-left px-2.5 py-2 text-xs truncate flex items-center gap-1.5 ${
                   activeId === c.id ? 'text-amber-500' : 'text-gray-400 hover:text-gray-200'
                 }`}
@@ -485,25 +502,34 @@ export default function ConversationsPage() {
 
       {/* Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex items-center justify-between px-6 py-3 border-b border-obsidian-700">
-          <div>
-            <h1 className="text-sm font-bold text-gray-100 tracking-tight">
-              {activeId
-                ? t('conv.titleWithId', { id: activeId })
-                : t('conv.title')}
-            </h1>
-            <p className="text-[10px] text-gray-500 mt-0.5">
-              {t('conv.description')}
-            </p>
+        <div className="flex items-center justify-between px-3 md:px-6 py-3 border-b border-obsidian-700 gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={() => setShowList(true)}
+              className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-200 hover:bg-obsidian-800 flex-shrink-0"
+              aria-label={t('conv.newChat')}
+            >
+              <List size={18} />
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-gray-100 tracking-tight truncate">
+                {activeId
+                  ? t('conv.titleWithId', { id: activeId })
+                  : t('conv.title')}
+              </h1>
+              <p className="text-[10px] text-gray-500 mt-0.5 hidden sm:block">
+                {t('conv.description')}
+              </p>
+            </div>
           </div>
           {/* Datasource selector */}
           {datasources.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Database size={14} className="text-gray-500" />
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Database size={14} className="text-gray-500 hidden sm:block" />
               <select
                 value={selectedDsId ?? ''}
                 onChange={(e) => { const v = parseInt(e.target.value) || null; setSelectedDsId(v); if (v) localStorage.setItem('conv-datasource-id', String(v)); else localStorage.removeItem('conv-datasource-id'); }}
-                className="bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-300 focus:outline-none focus:border-amber-500/50 transition-premium"
+                className="bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-300 focus:outline-none focus:border-amber-500/50 transition-premium max-w-[40vw] sm:max-w-none"
               >
                 {datasources.map((ds) => (
                   <option key={ds.id} value={ds.id}>
@@ -515,7 +541,7 @@ export default function ConversationsPage() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto scrollbar-thin px-3 md:px-6 py-4 space-y-4">
           {messages.length === 0 && (
             <EmptyState
               icon={Sparkle}
@@ -543,7 +569,7 @@ export default function ConversationsPage() {
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`flex gap-2 max-w-[75%] group ${
+                className={`flex gap-2 max-w-[88%] md:max-w-[75%] group ${
                   msg.role === 'user' ? 'flex-row-reverse' : ''
                 }`}
               >
@@ -636,7 +662,7 @@ export default function ConversationsPage() {
         </div>
 
         {/* Input composer */}
-        <div className="border-t border-obsidian-700 px-6 py-3">
+        <div className="border-t border-obsidian-700 px-3 md:px-6 py-3">
           <div className="relative">
             {/* Metrics popover */}
             {showMetricsPicker && (

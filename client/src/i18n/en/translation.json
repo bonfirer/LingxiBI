@@ -536,7 +536,8 @@
     "noReports": "No reports generated",
     "more": "more",
     "viewAll": "View all",
-    "convHint": "Conversation list is shown in the main area"
+    "convHint": "Conversation list is shown in the main area",
+    "browse": "Browse"
   },
   "time": {
     "justNow": "Just now",

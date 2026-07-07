@@ -183,7 +183,7 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-2xl">
+      <div className="p-4 md:p-6 max-w-2xl">
         <div className="animate-pulse space-y-4">
           <div className="h-5 bg-obsidian-800 rounded w-32" />
           <div className="h-48 bg-obsidian-800 rounded-xl" />
@@ -195,7 +195,7 @@ export default function SettingsPage() {
   const admin = isAdmin();
 
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-4 md:p-6 max-w-2xl">
       <div>
         <h1 className="text-lg font-bold text-gray-100 tracking-tight">
           {t('settings.title')}

@@ -423,7 +423,7 @@ export default function ReportDetailPage() {
 
   // ── Loading ──
   if (loading) return <div className="h-full flex items-center justify-center"><div className="w-4 h-4 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" /></div>;
-  if (!report) return <div className="p-6"><ErrorBanner message="Report not found" onDismiss={() => navigate('/reports')} /></div>;
+  if (!report) return <div className="p-4 md:p-6"><ErrorBanner message="Report not found" onDismiss={() => navigate('/reports')} /></div>;
 
   const hasHtml = !!report.html_content;
   const iframeSrc = withToken(`/api/reports/${report.id}/html?t=${report.updated_at || ''}`);
@@ -431,10 +431,10 @@ export default function ReportDetailPage() {
   return (
     <div className="h-full flex flex-col">
       {/* ── Top Bar ── */}
-      <div className="flex items-center px-5 py-2.5 border-b border-obsidian-700 flex-shrink-0">
-        <div className="flex items-center gap-3 flex-1">
+      <div className="flex items-center px-3 md:px-5 py-2.5 border-b border-obsidian-700 flex-shrink-0 gap-2 overflow-x-auto scrollbar-thin">
+        <div className="flex items-center gap-3 flex-shrink-0">
           <button onClick={() => navigate('/reports')} aria-label={t('common.back')} className="text-gray-500 hover:text-gray-300 transition-premium"><ArrowLeft size={16} /></button>
-          <h1 className="text-sm font-bold text-gray-100">{report.title}</h1>
+          <h1 className="text-sm font-bold text-gray-100 whitespace-nowrap max-w-[45vw] md:max-w-none truncate">{report.title}</h1>
           {currentVersion != null && (
             <span className="text-[8px] bg-obsidian-700 text-gray-300 px-1.5 py-0.5 rounded-full font-mono font-medium" title={t('reportDetail.currentVersion')}>
               v{currentVersion}
@@ -453,14 +453,14 @@ export default function ReportDetailPage() {
         </div>
         {/* Center: device toggle */}
         {hasHtml && (
-          <div className="flex items-center gap-1">
+          <div className="hidden md:flex items-center gap-1 flex-shrink-0">
             <button
               onClick={() => setDeviceMode('desktop')}
               className={`flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-md transition-premium ${
                 deviceMode === 'desktop' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/30' : 'text-gray-500 hover:text-gray-300 border border-transparent'
               }`}
             >
-              <Desktop size={13} /> {t('reportDetail.device.desktop')}
+              <Desktop size={13} /> <span className="hidden md:inline">{t('reportDetail.device.desktop')}</span>
             </button>
             <button
               onClick={() => setDeviceMode('mobile')}
@@ -468,54 +468,56 @@ export default function ReportDetailPage() {
                 deviceMode === 'mobile' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/30' : 'text-gray-500 hover:text-gray-300 border border-transparent'
               }`}
             >
-              <DeviceMobile size={13} /> {t('reportDetail.device.mobile')}
+              <DeviceMobile size={13} /> <span className="hidden md:inline">{t('reportDetail.device.mobile')}</span>
             </button>
           </div>
         )}
-        <div className="flex items-center gap-1.5 flex-1 justify-end">
+        <div className="flex items-center gap-1.5 flex-shrink-0 justify-end ml-auto">
           {/* Manual refresh */}
           <button
             onClick={() => { if (iframeRef.current && id) iframeRef.current.src = withToken(`/api/reports/${id}/html?t=${Date.now()}`); }}
-            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2 py-1.5 rounded-md transition-premium"
+            className="hidden md:flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2 py-1.5 rounded-md transition-premium"
             title={t('common.refresh')}
             aria-label={t('common.refresh')}
           >
             <ArrowClockwise size={11} />
           </button>
           {/* Refresh interval */}
-          <RefreshIntervalPicker value={refreshInterval} onChange={(v) => { setRefreshInterval(v); if (report) reportsApi.updateRefreshInterval(report.id, v).catch(() => {}); }} t={t} />
+          <div className="hidden md:block">
+            <RefreshIntervalPicker value={refreshInterval} onChange={(v) => { setRefreshInterval(v); if (report) reportsApi.updateRefreshInterval(report.id, v).catch(() => {}); }} t={t} />
+          </div>
           {/* Report-level global filters */}
           <button
             onClick={() => setShowFilters(true)}
-            className={`flex items-center gap-1 text-[10px] border px-2.5 py-1.5 rounded-md transition-premium ${
+            className={`hidden md:flex items-center gap-1 text-[10px] border px-2.5 py-1.5 rounded-md transition-premium ${
               (report.report_filters?.length ?? 0) > 0
                 ? 'text-amber-500/90 border-amber-500/30 hover:text-amber-400'
                 : 'text-gray-400 border-obsidian-700 hover:text-gray-200'
             }`}
           >
             <Funnel size={11} weight={(report.report_filters?.length ?? 0) > 0 ? 'fill' : 'regular'} />
-            {t('reportDetail.globalFilters.button')}
+            <span className="hidden md:inline">{t('reportDetail.globalFilters.button')}</span>
             {(report.report_filters?.length ?? 0) > 0 && ` (${report.report_filters!.length})`}
           </button>
-          <button onClick={handlePublish} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
-            <Upload size={11} /> {report.status === 'published' ? t('reportDetail.unpublish') : t('reportDetail.publish')}
+          <button onClick={handlePublish} className="hidden md:flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
+            <Upload size={11} /> <span className="hidden md:inline">{report.status === 'published' ? t('reportDetail.unpublish') : t('reportDetail.publish')}</span>
           </button>
           {/* Rollback to published version */}
           {report.published_html && report.html_content !== report.published_html && (
-            <button onClick={handleRollback} className="flex items-center gap-1 text-[10px] text-amber-500/80 hover:text-amber-400 border border-amber-500/20 px-2.5 py-1.5 rounded-md transition-premium" title={t('reportDetail.rollbackHint')}>
-              <ArrowCounterClockwise size={11} /> {t('reportDetail.rollback')}
+            <button onClick={handleRollback} className="hidden md:flex items-center gap-1 text-[10px] text-amber-500/80 hover:text-amber-400 border border-amber-500/20 px-2.5 py-1.5 rounded-md transition-premium" title={t('reportDetail.rollbackHint')}>
+              <ArrowCounterClockwise size={11} /> <span className="hidden md:inline">{t('reportDetail.rollback')}</span>
             </button>
           )}
 
           <button onClick={handleShare} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
-            <ShareNetwork size={11} /> {t('reportDetail.share')}
+            <ShareNetwork size={11} /> <span>{t('reportDetail.share')}</span>
           </button>
           <button
             onClick={toggleSummary}
             className={`flex items-center gap-1 text-[10px] border px-2.5 py-1.5 rounded-md transition-premium ${showSummary ? 'text-amber-500 border-amber-500/30 bg-amber-500/5' : 'text-gray-400 hover:text-gray-200 border-obsidian-700'}`}
             title={t('reportDetail.summary.title')}
           >
-            <Lightbulb size={11} /> {t('reportDetail.summary.button')}
+            <Lightbulb size={11} /> <span>{t('reportDetail.summary.button')}</span>
           </button>
         </div>
       </div>
@@ -527,7 +529,7 @@ export default function ReportDetailPage() {
 
         {/* AI Summary + Q&A Drawer (right side) */}
         {showSummary && (
-          <div className="w-96 bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0 order-2">
+          <div className="absolute md:static inset-0 md:inset-auto z-30 w-full md:w-96 bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0 order-2">
             <div className="flex items-center justify-between px-3 py-2 border-b border-obsidian-700 flex-shrink-0">
               <span className="text-[11px] text-gray-300 font-medium flex items-center gap-1.5">
                 <Lightbulb size={13} className="text-amber-500" /> {t('reportDetail.summary.title')}
@@ -640,7 +642,7 @@ export default function ReportDetailPage() {
 
         {/* Version History Drawer (right side) */}
         {showVersions && (
-          <div className="w-48 bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0 order-2">
+          <div className="absolute md:static inset-0 md:inset-auto z-30 w-full md:w-48 bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0 order-2">
             <div className="flex items-center justify-between px-3 py-2 border-b border-obsidian-700">
               <span className="text-[10px] text-gray-300 font-medium flex items-center gap-1.5">
                 <GitBranch size={13} className="text-amber-500" />
@@ -777,7 +779,7 @@ export default function ReportDetailPage() {
         )}
 
         {hasHtml || compareVersionId ? (
-          <div className={deviceMode === 'mobile' && !compareVersionId ? 'w-[390px] h-[844px] border border-obsidian-700 rounded-[32px] overflow-hidden shadow-2xl bg-obsidian-950 flex-shrink-0' : 'w-full h-full'}>
+          <div className={deviceMode === 'mobile' && !compareVersionId ? 'w-[390px] max-w-full h-[844px] max-h-full border border-obsidian-700 rounded-[32px] overflow-hidden shadow-2xl bg-obsidian-950 flex-shrink-0' : 'w-full h-full'}>
             {compareVersionId && report && (
               <div className="absolute top-2 left-2 z-10 text-[9px] bg-obsidian-900/90 border border-amber-500/30 rounded px-2 py-0.5 text-amber-500">
                 v{versions.find(v => v.id === compareVersionId)?.version} — {t('reportDetail.oldVersion')}
@@ -899,14 +901,16 @@ export default function ReportDetailPage() {
         <div className="flex items-center gap-2 max-w-7xl mx-auto">
           {/* Left: Dock style selector */}
           {!aiLoading && (
-            <StyleDock
-              selectedKey={selectedStyleKey}
-              onSelect={(key, prompt) => {
-                setSelectedStyleKey(key);
-                if (report) reportsApi.updateStyle(report.id, key).catch(() => {});
-                handleAISendPrompt(prompt);
-              }}
-            />
+            <div className="hidden md:block">
+              <StyleDock
+                selectedKey={selectedStyleKey}
+                onSelect={(key, prompt) => {
+                  setSelectedStyleKey(key);
+                  if (report) reportsApi.updateStyle(report.id, key).catch(() => {});
+                  handleAISendPrompt(prompt);
+                }}
+              />
+            </div>
           )}
 
           {/* Input with selected style indicator */}
@@ -945,7 +949,7 @@ export default function ReportDetailPage() {
             <button
               onClick={handleQuickGenerate}
               disabled={aiLoading || datasources.length === 0}
-              className="flex items-center gap-1.5 text-[10px] text-[#08080c] bg-amber-500 hover:bg-amber-400 font-semibold px-3 py-2 rounded-lg whitespace-nowrap transition-premium disabled:opacity-40 active:translate-y-[1px] flex-shrink-0"
+              className="hidden md:flex items-center gap-1.5 text-[10px] text-[#08080c] bg-amber-500 hover:bg-amber-400 font-semibold px-3 py-2 rounded-lg whitespace-nowrap transition-premium disabled:opacity-40 active:translate-y-[1px] flex-shrink-0"
             >
               <Sparkle size={11} weight="fill" />
               {t('reportDetail.quickActions.generate')}
@@ -953,7 +957,7 @@ export default function ReportDetailPage() {
           )}
 
           {/* Right: saved themes */}
-          <div className="relative flex-shrink-0">
+          <div className="hidden md:block relative flex-shrink-0">
             <button
               onClick={toggleThemes}
               title={t('reportDetail.themes.title')}
@@ -1019,7 +1023,7 @@ export default function ReportDetailPage() {
           </div>
 
           {/* Right: ask history */}
-          <div className="relative flex-shrink-0">
+          <div className="hidden md:block relative flex-shrink-0">
             <button
               onClick={toggleHistory}
               title={t('reportDetail.askHistory')}
@@ -1085,7 +1089,7 @@ export default function ReportDetailPage() {
           <button
             onClick={() => setShowDebug((v) => !v)}
             title={t('reportDetail.debug.button')}
-            className={`flex items-center justify-center w-9 h-9 rounded-lg border transition-premium ${
+            className={`hidden md:flex items-center justify-center w-9 h-9 rounded-lg border transition-premium ${
               showDebug
                 ? 'text-amber-500 border-amber-500/40 bg-amber-500/10'
                 : 'text-gray-400 border-obsidian-700 hover:text-amber-500 hover:border-amber-500/30'
@@ -1096,7 +1100,7 @@ export default function ReportDetailPage() {
           <button
             onClick={() => setShowHtmlSource(true)}
             title={t('reportDetail.htmlSource.button')}
-            className="flex items-center justify-center w-9 h-9 rounded-lg border border-obsidian-700 text-gray-400 hover:text-amber-500 hover:border-amber-500/30 transition-premium"
+            className="hidden md:flex items-center justify-center w-9 h-9 rounded-lg border border-obsidian-700 text-gray-400 hover:text-amber-500 hover:border-amber-500/30 transition-premium"
           >
             <Code size={15} />
           </button>
@@ -1109,7 +1113,7 @@ export default function ReportDetailPage() {
               }
             }}
             title={t('reportDetail.versions')}
-            className={`flex items-center justify-center w-9 h-9 rounded-lg border transition-premium ${
+            className={`hidden md:flex items-center justify-center w-9 h-9 rounded-lg border transition-premium ${
               showVersions
                 ? 'text-amber-500 border-amber-500/40 bg-amber-500/10'
                 : 'text-gray-400 border-obsidian-700 hover:text-amber-500 hover:border-amber-500/30'
@@ -1331,7 +1335,7 @@ function RefreshIntervalPicker({ value, onChange, t }: { value: number; onChange
         className="flex items-center gap-1.5 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium"
       >
         <Clock size={11} />
-        <span>{current.label}</span>
+        <span className="hidden md:inline">{current.label}</span>
         <CaretDown size={9} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (

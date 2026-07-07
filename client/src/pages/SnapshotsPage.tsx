@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Camera, Plus, Trash, Clock, ArrowUp, ArrowDown, Minus } from '@phosphor-icons/react';
+import { Camera, Plus, Trash, Clock, ArrowUp, ArrowDown, Minus, List } from '@phosphor-icons/react';
 import { useSnapshotStore } from '../stores/snapshotStore';
 import { metricsApi } from '../lib/api';
 import type { MetricPool, MetricSnapshot, SnapshotSchedule } from '../lib/types';
@@ -29,6 +29,8 @@ export default function SnapshotsPage() {
   const [toggleTarget, setToggleTarget] = useState<SnapshotSchedule | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 20;
+  // Mobile: the schedule list is an overlay drawer toggled by a button.
+  const [showList, setShowList] = useState(false);
 
   // Form state for creating schedule
   const [formMetricId, setFormMetricId] = useState<number | ''>();
@@ -141,9 +143,23 @@ export default function SnapshotsPage() {
   };
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden relative">
+      {/* Mobile overlay when the schedule list drawer is open */}
+      {showList && (
+        <div
+          className="md:hidden absolute inset-0 z-30 bg-black/60"
+          onClick={() => setShowList(false)}
+        />
+      )}
       {/* Left: Schedule List */}
-      <div className="w-72 border-r border-obsidian-700 flex flex-col overflow-hidden flex-shrink-0">
+      <div
+        className={`
+          absolute md:static inset-y-0 left-0 z-40 w-72
+          border-r border-obsidian-700 flex flex-col overflow-hidden flex-shrink-0 bg-obsidian-950
+          transform transition-transform duration-200 md:transform-none
+          ${showList ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}
+      >
         <div className="p-4 border-b border-obsidian-700">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
@@ -172,7 +188,7 @@ export default function SnapshotsPage() {
           {schedules.map((schedule) => (
             <div
               key={schedule.id}
-              onClick={() => handleSelectSchedule(schedule)}
+              onClick={() => { handleSelectSchedule(schedule); setShowList(false); }}
               className={`p-2.5 rounded-lg cursor-pointer transition-colors border ${
                 selectedSchedule?.id === schedule.id
                   ? 'bg-amber-500/5 border-amber-500/20'
@@ -222,16 +238,25 @@ export default function SnapshotsPage() {
         {selectedSchedule ? (
           <>
             {/* Header */}
-            <div className="p-4 border-b border-obsidian-700 flex items-center justify-between flex-shrink-0">
-              <div>
-                <h3 className="text-sm font-semibold text-gray-200">
-                  {getMetricName(selectedSchedule.metric_pool_id)}
-                  <span className="text-[10px] text-gray-500 font-normal ml-2">ID: {selectedSchedule.metric_pool_id}</span>
-                </h3>
-                <p className="text-[10px] text-gray-500 mt-0.5">
-                  {t('snapshots.lastRun')}: {formatTime(selectedSchedule.last_run_at)} · {t(`snapshots.${selectedSchedule.schedule_type}`)}
-                  {snapshots.length > 0 && ` · ${snapshots.length} 次采集`}
-                </p>
+            <div className="p-4 border-b border-obsidian-700 flex items-center justify-between flex-shrink-0 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  onClick={() => setShowList(true)}
+                  className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-200 hover:bg-obsidian-800 flex-shrink-0"
+                  aria-label={t('snapshots.title')}
+                >
+                  <List size={18} />
+                </button>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-gray-200 truncate">
+                    {getMetricName(selectedSchedule.metric_pool_id)}
+                    <span className="text-[10px] text-gray-500 font-normal ml-2">ID: {selectedSchedule.metric_pool_id}</span>
+                  </h3>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {t('snapshots.lastRun')}: {formatTime(selectedSchedule.last_run_at)} · {t(`snapshots.${selectedSchedule.schedule_type}`)}
+                    {snapshots.length > 0 && ` · ${snapshots.length} 次采集`}
+                  </p>
+                </div>
               </div>
               <button
                 onClick={handleTakeSnapshot}
@@ -319,6 +344,12 @@ export default function SnapshotsPage() {
               <Camera size={48} className="mx-auto text-gray-700 mb-3" />
               <p className="text-sm text-gray-500">{t('snapshots.noSchedules')}</p>
               <p className="text-[10px] text-gray-600 mt-1">{t('snapshots.noSchedulesHint')}</p>
+              <button
+                onClick={() => setShowList(true)}
+                className="md:hidden mt-4 inline-flex items-center gap-1.5 bg-amber-500/10 text-amber-500 text-xs px-3 py-2 rounded-lg"
+              >
+                <List size={14} /> {t('snapshots.title')}
+              </button>
             </div>
           </div>
         )}

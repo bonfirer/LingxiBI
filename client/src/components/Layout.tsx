@@ -18,13 +18,17 @@ export default function Layout() {
   const hideAIPanel = isConversationsPage || isReportDetail || isReportsPage || isLogsPage || isSettingsPage || isSnapshotsPage || isAlertsPage || isWishesPage;
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden grain-overlay">
+    <div className="flex h-dvh w-full overflow-hidden bg-obsidian-950 md:flex-row flex-col">
       <NavSidebar />
       {!hideAssetPanel && <AssetPanel />}
-      <main className="flex-1 overflow-y-auto scrollbar-thin bg-obsidian-950">
+      <main className="flex-1 overflow-y-auto scrollbar-thin bg-obsidian-950 min-h-0 pb-16 md:pb-0">
         <Outlet />
       </main>
-      {!hideAIPanel && <AIPanel />}
+      {!hideAIPanel && (
+        <div className="hidden md:block h-full">
+          <AIPanel />
+        </div>
+      )}
     </div>
   );
 }

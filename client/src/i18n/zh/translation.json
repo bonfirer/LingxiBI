@@ -536,7 +536,8 @@
     "noReports": "暂无报表",
     "more": "更多",
     "viewAll": "查看全部",
-    "convHint": "对话列表在主区域中显示"
+    "convHint": "对话列表在主区域中显示",
+    "browse": "浏览"
   },
   "time": {
     "justNow": "刚刚",

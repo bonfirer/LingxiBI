@@ -698,14 +698,23 @@ function ERDiagram({ graph, datasourceId }: { graph: KnowledgeGraph; datasourceI
     setTransform((prev) => ({ ...prev, x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }));
   };
   const handleMouseUp = () => setDragging(false);
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setTransform((prev) => ({
-      ...prev,
-      scale: Math.min(3, Math.max(0.2, prev.scale * delta)),
-    }));
-  };
+  // Zoom: bind a native (non-passive) wheel listener so preventDefault works.
+  // React's synthetic onWheel is attached as passive, which throws
+  // "Unable to preventDefault inside passive event listener invocation."
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      setTransform((prev) => ({
+        ...prev,
+        scale: Math.min(3, Math.max(0.2, prev.scale * delta)),
+      }));
+    };
+    el.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => el.removeEventListener('wheel', onWheelNative);
+  }, []);
 
   const handleTableClick = (tableId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -723,7 +732,6 @@ function ERDiagram({ graph, datasourceId }: { graph: KnowledgeGraph; datasourceI
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
       >
       <svg
         width="100%"
@@ -1165,7 +1173,7 @@ export default function DataSourcesPage() {
   // ── No datasource selected: show form or empty state ──
   if (!selectedDsId) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <PageHeader
           title={t('datasources.title')}
           description={t('datasources.description')}
@@ -1212,9 +1220,9 @@ export default function DataSourcesPage() {
           title={selectedDs?.name || `#${selectedDsId}`}
           description={
             selectedDs && (
-              <span className="flex items-center gap-3">
+              <span className="flex items-center gap-3 flex-wrap">
                 <StatusDot status={selectedDs.status} />
-                <span className="font-mono">{selectedDs.host}:{selectedDs.port} / {selectedDs.database_name}</span>
+                <span className="font-mono break-all">{selectedDs.host}:{selectedDs.port} / {selectedDs.database_name}</span>
                 <span className="text-gray-600">({selectedDs.db_type})</span>
                 {selectedDs.is_default && (
                   <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500">
@@ -1232,7 +1240,7 @@ export default function DataSourcesPage() {
             )
           }
           action={
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               {admin && (
                 <button
                   onClick={handleTest}

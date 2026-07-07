@@ -13,6 +13,7 @@ import {
   XCircle,
   WarningCircle,
   ChatCircleDots,
+  List,
 } from '@phosphor-icons/react';
 import { useAlertStore } from '../stores/alertStore';
 import { metricsApi, alertsApi } from '../lib/api';
@@ -41,6 +42,8 @@ export default function AlertsPage() {
   const [showFeishu, setShowFeishu] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  // Mobile: the rule list is an overlay drawer toggled by a button.
+  const [showList, setShowList] = useState(false);
 
   useEffect(() => {
     fetchRules();
@@ -71,9 +74,23 @@ export default function AlertsPage() {
   };
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden relative">
+      {/* Mobile overlay when the rule list drawer is open */}
+      {showList && (
+        <div
+          className="md:hidden absolute inset-0 z-30 bg-black/60"
+          onClick={() => setShowList(false)}
+        />
+      )}
       {/* Left: rule list */}
-      <div className="w-72 border-r border-obsidian-700 flex flex-col overflow-hidden flex-shrink-0">
+      <div
+        className={`
+          absolute md:static inset-y-0 left-0 z-40 w-72
+          border-r border-obsidian-700 flex flex-col overflow-hidden flex-shrink-0 bg-obsidian-950
+          transform transition-transform duration-200 md:transform-none
+          ${showList ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}
+      >
         <div className="p-4 border-b border-obsidian-700">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
@@ -100,7 +117,7 @@ export default function AlertsPage() {
                 <ChatCircleDots size={14} />
               </button>
               <button
-                onClick={() => { setCreating(true); setSelectedId(null); }}
+                onClick={() => { setCreating(true); setSelectedId(null); setShowList(false); }}
                 title={t('alerts.newRule')}
                 className="w-6 h-6 rounded flex items-center justify-center text-gray-400 hover:text-amber-500 hover:bg-obsidian-800 transition-colors"
               >
@@ -128,7 +145,7 @@ export default function AlertsPage() {
           {rules.map((rule) => (
             <div
               key={rule.id}
-              onClick={() => { setSelectedId(rule.id); setCreating(false); }}
+              onClick={() => { setSelectedId(rule.id); setCreating(false); setShowList(false); }}
               className={`p-2.5 rounded-lg cursor-pointer transition-colors border ${
                 selectedId === rule.id && !creating
                   ? 'bg-amber-500/5 border-amber-500/20'
@@ -167,7 +184,18 @@ export default function AlertsPage() {
       </div>
 
       {/* Right: editor or logs */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Mobile-only bar to open the rule list drawer */}
+        <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b border-obsidian-700 flex-shrink-0">
+          <button
+            onClick={() => setShowList(true)}
+            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-200 hover:bg-obsidian-800"
+            aria-label={t('alerts.title')}
+          >
+            <List size={18} />
+          </button>
+          <span className="text-sm font-semibold text-gray-200">{t('alerts.title')}</span>
+        </div>
         {creating || selectedRule ? (
           <RuleEditor
             key={selectedRule?.id ?? 'new'}
