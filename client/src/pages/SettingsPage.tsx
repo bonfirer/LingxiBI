@@ -33,6 +33,27 @@ const PROVIDERS: Record<string, ProviderPreset> = {
       'claude-3-opus-20240229',
     ],
   },
+  hunyuan: {
+    label: '腾讯混元',
+    base_url: 'https://api.hunyuan.cloud.tencent.com/v1',
+    models: [
+      'hunyuan-turbos-latest',
+      'hunyuan-pro',
+      'hunyuan-standard',
+      'hunyuan-lite',
+      'hunyuan-vision',
+    ],
+  },
+  zhipu: {
+    label: '智谱 AI',
+    base_url: 'https://open.bigmodel.cn/api/paas/v4',
+    models: ['glm-4-plus', 'glm-4', 'glm-4-flash', 'glm-4-long'],
+  },
+  alibaba: {
+    label: '阿里通义',
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-long', 'qwen-vl-plus'],
+  },
   ollama: {
     label: 'Ollama (local)',
     base_url: 'http://localhost:11434/v1',
@@ -207,6 +228,9 @@ export default function SettingsPage() {
               <option value="openai">{t('settings.providerOpenai')}</option>
               <option value="deepseek">{t('settings.providerDeepseek')}</option>
               <option value="anthropic">{t('settings.providerAnthropic')}</option>
+              <option value="hunyuan">{t('settings.providerHunyuan')}</option>
+              <option value="zhipu">{t('settings.providerZhipu')}</option>
+              <option value="alibaba">{t('settings.providerAlibaba')}</option>
               <option value="ollama">{t('settings.providerOllama')}</option>
               <option value="custom">{t('settings.providerCustom')}</option>
             </select>
