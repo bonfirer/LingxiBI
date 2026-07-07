@@ -10,6 +10,7 @@ use sqlx::MySqlPool;
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::{
+    compression::CompressionLayer,
     cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
     trace::TraceLayer,
@@ -266,6 +267,7 @@ async fn main() {
         .merge(flexible)
         .layer(axum::middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
+        .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10 MB max body
         .layer(cors)
         .with_state(state.clone());

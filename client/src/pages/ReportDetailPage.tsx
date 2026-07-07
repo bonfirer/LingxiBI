@@ -69,6 +69,7 @@ export default function ReportDetailPage() {
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [iframeLoading, setIframeLoading] = useState(true);
 
   // Mint a short-lived embed token on mount, then nudge a re-render so the
   // iframe src is rebuilt using it instead of the session JWT.
@@ -796,6 +797,12 @@ export default function ReportDetailPage() {
                 v{versions.find(v => v.id === compareVersionId)?.version} — {t('reportDetail.oldVersion')}
               </div>
             )}
+            {iframeLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-obsidian-950 z-5">
+                <div className="w-5 h-5 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin mb-2" />
+                <span className="text-[10px] text-gray-500">{t('reportDetail.loadingReport')}</span>
+              </div>
+            )}
             <iframe
               ref={iframeRef}
               key={compareVersionId ? `ver-${compareVersionId}` : report?.updated_at}
@@ -807,6 +814,7 @@ export default function ReportDetailPage() {
               // content is trusted (served by our own API).
               sandbox="allow-scripts allow-same-origin"
               title={report?.title}
+              onLoad={() => setIframeLoading(false)}
             />
           </div>
         ) : (

@@ -351,6 +351,7 @@
       "addData": "添加数据源",
       "hint": "提示：先添加数据源，再用 AI 生成页面。你可以随时通过对话调整样式。"
     },
+    "loadingReport": "正在加载报表...",
     "currentData": "当前数据源",
     "layoutHint": "调整组件尺寸（列数 × 行数）：",
     "filters": {
