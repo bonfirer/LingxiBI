@@ -59,7 +59,7 @@ export function ReportDebugPanel({ reportId, onClose }: Props) {
         >
           <ArrowClockwise size={11} className={loading ? 'animate-spin' : ''} /> {t('common.refresh')}
         </button>
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-300"><X size={14} /></button>
+        <button onClick={onClose} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={14} /></button>
       </div>
 
       <div className="overflow-y-auto scrollbar-thin p-3 space-y-2 font-mono">

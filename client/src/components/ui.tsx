@@ -131,7 +131,7 @@ export function PageHeader({
     <div className="flex items-center justify-between mb-6">
       <div>
         <h1 className="text-lg font-bold text-gray-100 tracking-tight">{title}</h1>
-        {description && <p className="text-xs text-gray-500 mt-1">{description}</p>}
+        {description && <div className="text-xs text-gray-500 mt-1">{description}</div>}
       </div>
       {action}
     </div>
@@ -146,7 +146,7 @@ export function StatusDot({ status }: { status: string }) {
       : status === 'error'
         ? 'bg-red-500'
         : 'bg-data-amber';
-  return <div className={`w-2 h-2 rounded-full ${color}`} />;
+  return <span className={`inline-block w-2 h-2 rounded-full ${color}`} />;
 }
 
 // ── Card ──
@@ -234,7 +234,7 @@ export function ConfirmDialog({
           <button
             onClick={onCancel}
             disabled={busy}
-            className="text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5 rounded-md border border-obsidian-700 transition-premium disabled:opacity-50"
+            className="text-xs text-gray-400 hover:text-gray-200 hover:bg-obsidian-700 px-3 py-1.5 rounded-md border border-obsidian-700 transition-premium disabled:opacity-50"
           >
             {cancelLabel}
           </button>

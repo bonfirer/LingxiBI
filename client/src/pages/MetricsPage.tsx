@@ -466,7 +466,7 @@ export default function MetricsPage() {
               className="flex-1 bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition-premium"
             />
             <button onClick={handleCreateGroup} className="text-xs text-amber-500 hover:text-amber-400 font-medium">{t('common.save')}</button>
-            <button onClick={() => setShowNewGroup(false)} className="text-gray-500 hover:text-gray-300"><X size={14} /></button>
+            <button onClick={() => setShowNewGroup(false)} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={14} /></button>
           </div>
         )}
 
@@ -714,7 +714,7 @@ export default function MetricsPage() {
                   className="bg-obsidian-800 border border-amber-500/50 rounded-lg px-3 py-1.5 text-sm font-bold text-gray-100 focus:outline-none"
                 />
                 <button onClick={handleSaveName} className="text-amber-500 hover:text-amber-400"><Check size={16} /></button>
-                <button onClick={() => setEditingName(false)} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+                <button onClick={() => setEditingName(false)} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={16} /></button>
               </div>
             ) : (
               <h1

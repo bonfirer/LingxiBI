@@ -319,7 +319,7 @@ export default function ReportsPage() {
                 <ChartBar size={16} className="text-amber-500" />
                 {t('reports.createTitle')}
               </h3>
-              <button onClick={() => setShowCreate(false)} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+              <button onClick={() => setShowCreate(false)} className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={16} /></button>
             </div>
             <p className="text-[11px] text-gray-500 mb-3">{t('reports.createHint')}</p>
             <label className="block text-[11px] font-medium text-gray-400 mb-1">{t('reports.reportName')}</label>
@@ -491,8 +491,8 @@ function LazyReportPreview({ report }: { report: Report }) {
           loading="lazy"
           // Static thumbnail of AI-generated HTML: allow scripts (charts need
           // them) but block top-navigation, form submission, popups, downloads,
-          // etc. Matches the report detail viewer's sandbox.
-          sandbox="allow-scripts allow-same-origin"
+          // same-origin access, etc. Preview-only — no user interaction.
+          sandbox="allow-scripts"
           onLoad={() => releaseRef.current?.()}
           onError={() => releaseRef.current?.()}
         />

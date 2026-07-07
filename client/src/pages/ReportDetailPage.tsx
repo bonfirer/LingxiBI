@@ -555,7 +555,7 @@ export default function ReportDetailPage() {
               <span className="text-[11px] text-gray-300 font-medium flex items-center gap-1.5">
                 <Lightbulb size={13} className="text-amber-500" /> {t('reportDetail.summary.title')}
               </span>
-              <button onClick={() => setShowSummary(false)} aria-label={t('common.close')} className="text-gray-500 hover:text-gray-300"><X size={12} /></button>
+              <button onClick={() => setShowSummary(false)} aria-label={t('common.close')} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={12} /></button>
             </div>
 
             {/* Scrollable: summary block + Q&A conversation */}
@@ -666,7 +666,7 @@ export default function ReportDetailPage() {
           <div className="w-48 bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0 order-2">
             <div className="flex items-center justify-between px-3 py-2 border-b border-obsidian-700">
               <span className="text-[10px] text-gray-300 font-medium">{t('reportDetail.versions')}</span>
-              <button onClick={() => { setShowVersions(false); setCompareVersionId(null); }} aria-label={t('common.close')} className="text-gray-500 hover:text-gray-300"><X size={12} /></button>
+              <button onClick={() => { setShowVersions(false); setCompareVersionId(null); }} aria-label={t('common.close')} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={12} /></button>
             </div>
             <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1.5">
               {versions.length === 0 && (
@@ -801,6 +801,10 @@ export default function ReportDetailPage() {
               key={compareVersionId ? `ver-${compareVersionId}` : report?.updated_at}
               src={compareVersionId && report ? withToken(`/api/reports/${report.id}/versions/${compareVersionId}/html`) : iframeSrc}
               className="w-full h-full border-0"
+              // NOTE: allow-same-origin is required for the injected filter bar
+              // JS to fetch /data from the same origin. The browser warning about
+              // scripts + same-origin is expected and acceptable — the iframe
+              // content is trusted (served by our own API).
               sandbox="allow-scripts allow-same-origin"
               title={report?.title}
             />
@@ -1025,7 +1029,7 @@ export default function ReportDetailPage() {
           <div className="bg-obsidian-900 border border-obsidian-700 rounded-2xl w-[420px] max-h-[70vh] overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-obsidian-700">
               <h2 className="text-sm font-semibold text-gray-200">{t('reportDetail.dataSources')}</h2>
-              <button onClick={() => setShowDsModal(false)} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+              <button onClick={() => setShowDsModal(false)} className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={16} /></button>
             </div>
             <div className="p-4 overflow-y-auto max-h-[50vh] scrollbar-thin space-y-3">
               {/* Current datasources */}

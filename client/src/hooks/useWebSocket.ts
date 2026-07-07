@@ -34,9 +34,11 @@ export function useWebSocket({ onMessage, onOpen, onClose, onError }: UseWebSock
   handlersRef.current = { onMessage, onOpen, onClose, onError };
 
   const connect = useCallback(() => {
+    const token = localStorage.getItem('token') || '';
+    if (!token) return; // Skip connection when not authenticated
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const token = localStorage.getItem('token') || '';
     const url = `${protocol}//${host}/api/chat?token=${encodeURIComponent(token)}`;
 
     const ws = new WebSocket(url);
@@ -76,7 +78,17 @@ export function useWebSocket({ onMessage, onOpen, onClose, onError }: UseWebSock
     connect();
     return () => {
       clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      if (ws) {
+        // If still connecting, wait for open/close before closing to avoid
+        // the "WebSocket is closed before the connection is established" warning.
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => ws.close();
+          ws.onerror = () => {};
+        } else if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      }
     };
   }, [connect]);
 

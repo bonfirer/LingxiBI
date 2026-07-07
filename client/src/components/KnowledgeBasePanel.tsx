@@ -175,7 +175,7 @@ export default function KnowledgeBasePanel({ datasourceId }: { datasourceId: num
                           />
                           <div className="flex gap-2">
                             <button onClick={handleSaveEdit} className="text-amber-500 hover:text-amber-400"><Check size={12} /></button>
-                            <button onClick={() => setEditingId(null)} className="text-gray-500 hover:text-gray-300"><X size={12} /></button>
+                            <button onClick={() => setEditingId(null)} className="w-5 h-5 rounded flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={12} /></button>
                           </div>
                         </div>
                       ) : (

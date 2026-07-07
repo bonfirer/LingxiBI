@@ -1703,7 +1703,7 @@ function DataSourceForm({
     <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold text-gray-200">{t('datasources.newSourceTitle')}</h2>
-        <button onClick={onCancel} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+        <button onClick={onCancel} className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={16} /></button>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
@@ -1814,7 +1814,7 @@ function GrantsModal({
             <Key size={15} className="text-amber-500" />
             {t('datasources.access.title', { name: datasourceName })}
           </h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+          <button onClick={onClose} className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={16} /></button>
         </div>
 
         <div className="px-5 py-4 overflow-y-auto scrollbar-thin">
