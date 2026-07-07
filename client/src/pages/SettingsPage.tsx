@@ -220,20 +220,26 @@ export default function SettingsPage() {
             <label className="text-[11px] font-medium text-gray-400">
               {t('settings.provider')}
             </label>
-            <select
-              value={config.provider}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium appearance-none cursor-pointer"
-            >
-              <option value="openai">{t('settings.providerOpenai')}</option>
-              <option value="deepseek">{t('settings.providerDeepseek')}</option>
-              <option value="anthropic">{t('settings.providerAnthropic')}</option>
-              <option value="hunyuan">{t('settings.providerHunyuan')}</option>
-              <option value="zhipu">{t('settings.providerZhipu')}</option>
-              <option value="alibaba">{t('settings.providerAlibaba')}</option>
-              <option value="ollama">{t('settings.providerOllama')}</option>
-              <option value="custom">{t('settings.providerCustom')}</option>
-            </select>
+            <div className="relative">
+              <select
+                value={config.provider}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium appearance-none cursor-pointer"
+              >
+                <option value="openai">{t('settings.providerOpenai')}</option>
+                <option value="deepseek">{t('settings.providerDeepseek')}</option>
+                <option value="anthropic">{t('settings.providerAnthropic')}</option>
+                <option value="hunyuan">{t('settings.providerHunyuan')}</option>
+                <option value="zhipu">{t('settings.providerZhipu')}</option>
+                <option value="alibaba">{t('settings.providerAlibaba')}</option>
+                <option value="ollama">{t('settings.providerOllama')}</option>
+                <option value="custom">{t('settings.providerCustom')}</option>
+              </select>
+              <CaretDown
+                size={12}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5 mb-4">

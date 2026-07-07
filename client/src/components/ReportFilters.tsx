@@ -145,65 +145,71 @@ export function ReportFilters({ report, datasources, onClose, onApplied }: Props
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="bg-obsidian-900 border border-obsidian-700 rounded-2xl w-[520px] max-h-[75vh] overflow-hidden shadow-2xl"
+        className="bg-obsidian-900 border border-obsidian-700 rounded-2xl w-[540px] max-h-[80vh] overflow-hidden shadow-2xl shadow-black/50"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3 border-b border-obsidian-700">
-          <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-1.5">
-            <Funnel size={14} className="text-amber-500" /> {t('reportDetail.globalFilters.title')}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-obsidian-700 bg-obsidian-800/30">
+          <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+            <Funnel size={16} className="text-amber-500" weight="fill" />
+            {t('reportDetail.globalFilters.title')}
           </h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300"><X size={16} /></button>
+          <button onClick={onClose} className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium">
+            <X size={16} />
+          </button>
         </div>
 
-        <div className="p-4 overflow-y-auto max-h-[55vh] scrollbar-thin space-y-3">
-          <p className="text-[10px] text-gray-500 leading-relaxed bg-obsidian-800/40 border border-obsidian-700/50 rounded-lg px-2.5 py-2">
+        <div className="p-5 overflow-y-auto max-h-[60vh] scrollbar-thin space-y-4">
+          <p className="text-[11px] text-gray-400 leading-relaxed bg-obsidian-800/50 border border-obsidian-700/50 rounded-lg px-3 py-2.5">
             {t('reportDetail.globalFilters.hint')}
           </p>
           {drafts.length === 0 && (
-            <p className="text-[11px] text-gray-600">{t('reportDetail.globalFilters.empty')}</p>
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <Funnel size={32} className="text-gray-700 mb-2" />
+              <p className="text-[11px] text-gray-500">{t('reportDetail.globalFilters.empty')}</p>
+            </div>
           )}
 
           {drafts.map((d, i) => {
             const targetCols = (dsId: number) => columnsOf(datasources.find((x) => x.datasource_id === dsId));
             return (
-              <div key={d.key} className="p-2.5 rounded-lg bg-obsidian-800 border border-obsidian-700 space-y-2">
-                <div className="flex items-center gap-1.5">
+              <div key={d.key} className="p-3 rounded-xl bg-obsidian-800/50 border border-obsidian-700 space-y-3 hover:border-obsidian-600 transition-premium">
+                <div className="flex items-center gap-2">
                   <input
                     value={d.label}
                     onChange={(e) => update(i, { label: e.target.value })}
                     placeholder={t('reportDetail.globalFilters.label')}
-                    className={`${inputCls} w-28`}
+                    className={`${inputCls} w-32`}
                   />
                   <select value={d.op} onChange={(e) => update(i, { op: e.target.value as Op })} className={inputCls}>
                     {OPS.map((op) => <option key={op} value={op}>{op}</option>)}
                   </select>
                   {d.op === 'BETWEEN' ? (
                     <>
-                      <input value={d.from} onChange={(e) => update(i, { from: e.target.value })} placeholder={t('reportDetail.filters.betweenFrom')} className={`${inputCls} w-20`} />
-                      <input value={d.to} onChange={(e) => update(i, { to: e.target.value })} placeholder={t('reportDetail.filters.betweenTo')} className={`${inputCls} w-20`} />
+                      <input value={d.from} onChange={(e) => update(i, { from: e.target.value })} placeholder={t('reportDetail.filters.betweenFrom')} className={`${inputCls} w-24`} />
+                      <input value={d.to} onChange={(e) => update(i, { to: e.target.value })} placeholder={t('reportDetail.filters.betweenTo')} className={`${inputCls} w-24`} />
                     </>
                   ) : (
                     <input
                       value={d.value}
                       onChange={(e) => update(i, { value: e.target.value })}
                       placeholder={d.op === 'IN' ? t('reportDetail.filters.inHint') : t('reportDetail.filters.valuePlaceholder')}
-                      className={`${inputCls} flex-1 min-w-[80px]`}
+                      className={`${inputCls} flex-1 min-w-[100px]`}
                     />
                   )}
-                  <button onClick={() => removeFilter(i)} className="text-gray-700 hover:text-red-400 transition-premium">
-                    <Trash size={13} />
+                  <button onClick={() => removeFilter(i)} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition-premium">
+                    <Trash size={14} />
                   </button>
                 </div>
 
                 {/* Targets: which dataset column(s) this control applies to */}
-                <div className="pl-2 border-l border-obsidian-700 space-y-1">
-                  <span className="text-[9px] text-gray-500 uppercase tracking-wide">{t('reportDetail.globalFilters.appliesTo')}</span>
+                <div className="pl-3 border-l-2 border-amber-500/30 space-y-2">
+                  <span className="text-[9px] text-amber-500/80 uppercase tracking-wider font-medium">{t('reportDetail.globalFilters.appliesTo')}</span>
                   {d.targets.map((tg, ti) => (
-                    <div key={ti} className="flex items-center gap-1.5">
+                    <div key={ti} className="flex items-center gap-2">
                       <select
                         value={tg.datasource_id}
                         onChange={(e) => updateTarget(i, ti, { datasource_id: Number(e.target.value), column: '' })}
-                        className={`${inputCls} max-w-[150px]`}
+                        className={`${inputCls} max-w-[160px]`}
                       >
                         {datasources.map((ds) => (
                           <option key={ds.id} value={ds.datasource_id}>{ds.name}</option>
@@ -214,18 +220,18 @@ export function ReportFilters({ report, datasources, onClose, onApplied }: Props
                         value={tg.column}
                         onChange={(e) => updateTarget(i, ti, { column: e.target.value })}
                         placeholder={t('reportDetail.filters.column')}
-                        className={`${inputCls} flex-1 min-w-[80px]`}
+                        className={`${inputCls} flex-1 min-w-[100px]`}
                       />
                       <datalist id={`gcols-${i}-${ti}`}>
                         {targetCols(tg.datasource_id).map((c) => <option key={c} value={c} />)}
                       </datalist>
-                      <button onClick={() => removeTarget(i, ti)} className="text-gray-700 hover:text-red-400 transition-premium">
-                        <X size={11} />
+                      <button onClick={() => removeTarget(i, ti)} className="w-5 h-5 rounded flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition-premium">
+                        <X size={12} />
                       </button>
                     </div>
                   ))}
-                  <button onClick={() => addTarget(i)} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 transition-premium">
-                    <Plus size={10} /> {t('reportDetail.globalFilters.addTarget')}
+                  <button onClick={() => addTarget(i)} className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-gray-200 transition-premium mt-1">
+                    <Plus size={11} /> {t('reportDetail.globalFilters.addTarget')}
                   </button>
                 </div>
               </div>
@@ -235,20 +241,20 @@ export function ReportFilters({ report, datasources, onClose, onApplied }: Props
           {error && <p className="text-[11px] text-red-400">{error}</p>}
         </div>
 
-        <div className="flex items-center gap-2 px-4 py-3 border-t border-obsidian-700">
-          <button onClick={addFilter} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-200 transition-premium">
-            <Plus size={12} /> {t('reportDetail.globalFilters.add')}
+        <div className="flex items-center gap-3 px-5 py-4 border-t border-obsidian-700 bg-obsidian-800/30">
+          <button onClick={addFilter} className="flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-amber-400 transition-premium">
+            <Plus size={13} weight="bold" /> {t('reportDetail.globalFilters.add')}
           </button>
           <div className="flex-1" />
-          <button onClick={onClose} className="text-[11px] text-gray-500 hover:text-gray-300 px-2 transition-premium">
+          <button onClick={onClose} className="text-[11px] text-gray-500 hover:text-gray-300 px-3 py-1.5 rounded-md hover:bg-obsidian-700 transition-premium">
             {t('common.close')}
           </button>
           <button
             onClick={apply}
             disabled={saving}
-            className="flex items-center gap-1 text-[11px] text-amber-500/90 hover:text-amber-400 disabled:opacity-50 border border-amber-500/30 rounded-md px-2.5 py-1 transition-premium"
+            className="flex items-center gap-1.5 text-[11px] text-amber-500 hover:text-amber-400 disabled:opacity-50 bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/30 rounded-md px-3.5 py-1.5 transition-premium font-medium"
           >
-            <Check size={12} /> {saving ? t('reportDetail.filters.saving') : t('reportDetail.filters.apply')}
+            <Check size={13} weight="bold" /> {saving ? t('reportDetail.filters.saving') : t('reportDetail.filters.apply')}
           </button>
         </div>
       </div>
