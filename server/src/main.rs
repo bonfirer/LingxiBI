@@ -146,6 +146,7 @@ async fn main() {
         .route("/api/reports/{id}/debug", get(routes::reports::debug_sql))
         .route("/api/reports/{id}/refresh-interval", put(routes::reports::update_refresh_interval))
         .route("/api/reports/{id}/style", put(routes::reports::update_style))
+        .route("/api/reports/{id}/html", put(routes::reports::update_html))
         .route("/api/reports/{id}/versions", get(routes::reports::list_versions))
         .route("/api/reports/{id}/versions/{vid}/restore", post(routes::reports::restore_version))
         .route("/api/reports/{id}/versions/{vid}", delete(routes::reports::delete_version))

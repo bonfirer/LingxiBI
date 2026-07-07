@@ -352,6 +352,11 @@
       "hint": "Tip: Add data sources first, then use AI to generate. You can refine the design through conversation."
     },
     "loadingReport": "Loading report...",
+    "htmlSource": {
+      "button": "Source",
+      "title": "Edit Report Source",
+      "saved": "Source saved"
+    },
     "currentData": "Current Data Sources",
     "layoutHint": "Adjust widget sizes (columns × rows):",
     "filters": {

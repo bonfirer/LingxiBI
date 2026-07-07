@@ -5,6 +5,7 @@ import {
   ArrowLeft, Sparkle, PaperPlaneRight, ShareNetwork, Upload,
   Plus, Database, Star, X, Stop, Clock, ArrowClockwise, CaretDown, ArrowCounterClockwise,
   Desktop, DeviceMobile, ClockCounterClockwise, Trash, Palette, Lightbulb, ChatCircle, Funnel, Bug,
+  Code, GitBranch,
 } from '@phosphor-icons/react';
 import {
   reportsApi, metricsApi, metricGroupsApi, reportThemesApi, reportSummaryApi,
@@ -70,6 +71,9 @@ export default function ReportDetailPage() {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [iframeLoading, setIframeLoading] = useState(true);
+  const [showHtmlSource, setShowHtmlSource] = useState(false);
+  const [htmlSource, setHtmlSource] = useState('');
+  const [htmlSourceSaving, setHtmlSourceSaving] = useState(false);
 
   // Mint a short-lived embed token on mount, then nudge a re-render so the
   // iframe src is rebuilt using it instead of the session JWT.
@@ -478,9 +482,8 @@ export default function ReportDetailPage() {
           >
             <ArrowClockwise size={11} />
           </button>
-          <button onClick={() => setShowDsModal(true)} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
-            <Database size={11} /> {t('reportDetail.dataSources')} ({datasources.length})
-          </button>
+          {/* Refresh interval */}
+          <RefreshIntervalPicker value={refreshInterval} onChange={(v) => { setRefreshInterval(v); if (report) reportsApi.updateRefreshInterval(report.id, v).catch(() => {}); }} t={t} />
           {/* Report-level global filters */}
           <button
             onClick={() => setShowFilters(true)}
@@ -493,21 +496,6 @@ export default function ReportDetailPage() {
             <Funnel size={11} weight={(report.report_filters?.length ?? 0) > 0 ? 'fill' : 'regular'} />
             {t('reportDetail.globalFilters.button')}
             {(report.report_filters?.length ?? 0) > 0 && ` (${report.report_filters!.length})`}
-          </button>
-          {/* Refresh interval */}
-          <RefreshIntervalPicker value={refreshInterval} onChange={(v) => { setRefreshInterval(v); if (report) reportsApi.updateRefreshInterval(report.id, v).catch(() => {}); }} t={t} />
-          {/* Debug SQL toggle */}
-          <button
-            onClick={() => setShowDebug((v) => !v)}
-            className={`flex items-center gap-1 text-[10px] border px-2 py-1.5 rounded-md transition-premium ${
-              showDebug
-                ? 'text-amber-500/90 border-amber-500/30 hover:text-amber-400'
-                : 'text-gray-400 border-obsidian-700 hover:text-gray-200'
-            }`}
-            title={t('reportDetail.debug.button')}
-            aria-label={t('reportDetail.debug.button')}
-          >
-            <Bug size={11} weight={showDebug ? 'fill' : 'regular'} /> {t('reportDetail.debug.button')}
           </button>
           <button onClick={handlePublish} className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium">
             <Upload size={11} /> {report.status === 'published' ? t('reportDetail.unpublish') : t('reportDetail.publish')}
@@ -528,18 +516,6 @@ export default function ReportDetailPage() {
             title={t('reportDetail.summary.title')}
           >
             <Lightbulb size={11} /> {t('reportDetail.summary.button')}
-          </button>
-          <button
-            onClick={async () => {
-              setShowVersions(!showVersions);
-              if (!showVersions && report) {
-                const res = await fetch(`/api/reports/${report.id}/versions`, { headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
-                if (res.ok) setVersions(await res.json());
-              }
-            }}
-            className={`flex items-center gap-1 text-[10px] border px-2.5 py-1.5 rounded-md transition-premium ${showVersions ? 'text-amber-500 border-amber-500/30 bg-amber-500/5' : 'text-gray-400 hover:text-gray-200 border-obsidian-700'}`}
-          >
-            <ClockCounterClockwise size={11} /> {t('reportDetail.versions')}
           </button>
         </div>
       </div>
@@ -666,7 +642,10 @@ export default function ReportDetailPage() {
         {showVersions && (
           <div className="w-48 bg-obsidian-900 border-l border-obsidian-700 flex flex-col flex-shrink-0 order-2">
             <div className="flex items-center justify-between px-3 py-2 border-b border-obsidian-700">
-              <span className="text-[10px] text-gray-300 font-medium">{t('reportDetail.versions')}</span>
+              <span className="text-[10px] text-gray-300 font-medium flex items-center gap-1.5">
+                <GitBranch size={13} className="text-amber-500" />
+                {t('reportDetail.versions')}
+              </span>
               <button onClick={() => { setShowVersions(false); setCompareVersionId(null); }} aria-label={t('common.close')} className="w-6 h-6 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"><X size={12} /></button>
             </div>
             <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1.5">
@@ -747,7 +726,14 @@ export default function ReportDetailPage() {
 
         {/* Main preview area */}
         <div className="flex-1 flex flex-col overflow-hidden order-1">
-          <div className={`flex-1 overflow-auto relative ${deviceMode === 'mobile' && hasHtml ? 'flex items-start justify-center py-4' : ''}`}>
+          <div
+            className={`flex-1 relative ${
+              deviceMode === 'mobile' && hasHtml
+                ? 'flex items-center justify-center overflow-auto [&::-webkit-scrollbar]:hidden'
+                : 'overflow-auto'
+            }`}
+            style={deviceMode === 'mobile' && hasHtml ? { scrollbarWidth: 'none', msOverflowStyle: 'none' } : undefined}
+          >
 
         {/* AI Loading Overlay */}
         {aiLoading && (
@@ -791,7 +777,7 @@ export default function ReportDetailPage() {
         )}
 
         {hasHtml || compareVersionId ? (
-          <div className={deviceMode === 'mobile' && !compareVersionId ? 'w-[375px] h-[667px] border border-obsidian-700 rounded-2xl overflow-hidden shadow-2xl bg-obsidian-950 flex-shrink-0' : 'w-full h-full'}>
+          <div className={deviceMode === 'mobile' && !compareVersionId ? 'w-[390px] h-[844px] border border-obsidian-700 rounded-[32px] overflow-hidden shadow-2xl bg-obsidian-950 flex-shrink-0' : 'w-full h-full'}>
             {compareVersionId && report && (
               <div className="absolute top-2 left-2 z-10 text-[9px] bg-obsidian-900/90 border border-amber-500/30 rounded px-2 py-0.5 text-amber-500">
                 v{versions.find(v => v.id === compareVersionId)?.version} — {t('reportDetail.oldVersion')}
@@ -834,6 +820,75 @@ export default function ReportDetailPage() {
         </div>{/* close order-1 main preview */}
       </div>
 
+      {/* ── HTML Source Editor ── */}
+      {showHtmlSource && report && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={() => setShowHtmlSource(false)}
+        >
+          <div
+            className="bg-obsidian-900 border border-obsidian-700 rounded-2xl w-[900px] max-w-[95vw] h-[80vh] flex flex-col shadow-2xl shadow-black/50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-obsidian-700 bg-obsidian-800/30 flex-shrink-0">
+              <h2 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+                <Code size={16} className="text-amber-500" weight="bold" />
+                {t('reportDetail.htmlSource.title')}
+              </h2>
+              <button
+                onClick={() => setShowHtmlSource(false)}
+                aria-label={t('common.close')}
+                className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-obsidian-700 transition-premium"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 p-4 min-h-0">
+              <textarea
+                value={htmlSource || report.html_content || ''}
+                onChange={(e) => setHtmlSource(e.target.value)}
+                className="w-full h-full bg-obsidian-950 border border-obsidian-700 rounded-lg p-3 text-[11px] font-mono text-gray-300 resize-none focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 scrollbar-thin"
+                spellCheck={false}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-obsidian-700 bg-obsidian-800/30 flex-shrink-0">
+              <button
+                onClick={() => setShowHtmlSource(false)}
+                className="text-xs text-gray-400 hover:text-gray-200 hover:bg-obsidian-700 px-3 py-1.5 rounded-md border border-obsidian-700 transition-premium"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!report) return;
+                  setHtmlSourceSaving(true);
+                  try {
+                    const updated = await reportsApi.updateHtml(report.id, htmlSource || report.html_content || '');
+                    setReport(updated);
+                    setHtmlSource('');
+                    setShowHtmlSource(false);
+                    setIframeLoading(true);
+                    if (iframeRef.current) {
+                      await fetchEmbedToken();
+                      iframeRef.current.src = withToken(`/api/reports/${report.id}/html?t=${Date.now()}`);
+                    }
+                    toast.success(t('reportDetail.htmlSource.saved'));
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : t('common.error'));
+                  } finally {
+                    setHtmlSourceSaving(false);
+                  }
+                }}
+                disabled={htmlSourceSaving}
+                className="text-xs px-3 py-1.5 rounded-md transition-premium disabled:opacity-60 text-[#08080c] bg-amber-500 hover:bg-amber-400"
+              >
+                {htmlSourceSaving ? t('common.saving') : t('common.save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Debug SQL panel (below the report, only when toggled on) ── */}
       {showDebug && report && (
         <ReportDebugPanel reportId={report.id} onClose={() => setShowDebug(false)} />
@@ -841,7 +896,7 @@ export default function ReportDetailPage() {
 
       {/* ── AI Chat Bar (bottom) with Dock-style selector ── */}
       <div className="flex-shrink-0 border-t border-obsidian-700 px-5 py-3 bg-obsidian-900 relative">
-        <div className="flex items-center gap-2 max-w-4xl mx-auto">
+        <div className="flex items-center gap-2 max-w-7xl mx-auto">
           {/* Left: Dock style selector */}
           {!aiLoading && (
             <StyleDock
@@ -1011,6 +1066,57 @@ export default function ReportDetailPage() {
               </>
             )}
           </div>
+
+          <div className="w-px h-5 bg-obsidian-700 mx-1" />
+
+          {/* Right: report utility buttons */}
+          <button
+            onClick={() => setShowDsModal(true)}
+            title={t('reportDetail.dataSources')}
+            className="relative flex items-center justify-center w-9 h-9 rounded-lg border border-obsidian-700 text-gray-400 hover:text-amber-500 hover:border-amber-500/30 transition-premium"
+          >
+            <Database size={15} />
+            {datasources.length > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 bg-amber-500 text-[#08080c] text-[8px] font-bold rounded-full flex items-center justify-center">
+                {datasources.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setShowDebug((v) => !v)}
+            title={t('reportDetail.debug.button')}
+            className={`flex items-center justify-center w-9 h-9 rounded-lg border transition-premium ${
+              showDebug
+                ? 'text-amber-500 border-amber-500/40 bg-amber-500/10'
+                : 'text-gray-400 border-obsidian-700 hover:text-amber-500 hover:border-amber-500/30'
+            }`}
+          >
+            <Bug size={15} weight={showDebug ? 'fill' : 'regular'} />
+          </button>
+          <button
+            onClick={() => setShowHtmlSource(true)}
+            title={t('reportDetail.htmlSource.button')}
+            className="flex items-center justify-center w-9 h-9 rounded-lg border border-obsidian-700 text-gray-400 hover:text-amber-500 hover:border-amber-500/30 transition-premium"
+          >
+            <Code size={15} />
+          </button>
+          <button
+            onClick={async () => {
+              setShowVersions(!showVersions);
+              if (!showVersions && report) {
+                const res = await fetch(`/api/reports/${report.id}/versions`, { headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } });
+                if (res.ok) setVersions(await res.json());
+              }
+            }}
+            title={t('reportDetail.versions')}
+            className={`flex items-center justify-center w-9 h-9 rounded-lg border transition-premium ${
+              showVersions
+                ? 'text-amber-500 border-amber-500/40 bg-amber-500/10'
+                : 'text-gray-400 border-obsidian-700 hover:text-amber-500 hover:border-amber-500/30'
+            }`}
+          >
+            <GitBranch size={15} />
+          </button>
         </div>
         {aiLoading && <p className="text-center text-[10px] text-amber-500/60 mt-1.5">{t('reportDetail.aiGenerating')}</p>}
       </div>

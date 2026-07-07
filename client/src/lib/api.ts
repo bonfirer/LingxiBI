@@ -293,6 +293,8 @@ export const reportsApi = {
     request<Report>(`/reports/${reportId}/refresh-interval`, { method: 'PUT', body: JSON.stringify({ refresh_interval: interval }) }),
   updateStyle: (reportId: number, styleKey: string | null) =>
     request<Report>(`/reports/${reportId}/style`, { method: 'PUT', body: JSON.stringify({ style_key: styleKey }) }),
+  updateHtml: (reportId: number, html: string) =>
+    request<Report>(`/reports/${reportId}/html`, { method: 'PUT', body: JSON.stringify({ html_content: html }) }),
 };
 
 // ── Report Themes (user-curated, reusable dashboard styles) ──

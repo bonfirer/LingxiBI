@@ -1402,6 +1402,35 @@ pub async fn update_style(
     Ok(Json(report))
 }
 
+/// Update the raw HTML source for a report.
+pub async fn update_html(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<Report>, (StatusCode, String)> {
+    load_owned_report(&state, id, &user).await?;
+    let html = body
+        .get("html_content")
+        .and_then(|v| v.as_str())
+        .ok_or((StatusCode::BAD_REQUEST, "html_content is required".to_string()))?;
+
+    sqlx::query("UPDATE reports SET html_content = ? WHERE id = ?")
+        .bind(html)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(crate::routes::internal_error)?;
+
+    let report = sqlx::query_as::<_, Report>("SELECT * FROM reports WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(crate::routes::internal_error)?;
+
+    Ok(Json(report))
+}
+
 /// Score the design quality of a generated report HTML.
 async fn score_report_design(db: &sqlx::MySqlPool, report_id: i32, html: &str) {
     // Simple heuristic scoring — no LLM call needed, instant
