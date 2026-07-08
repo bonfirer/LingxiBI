@@ -755,6 +755,23 @@ pub async fn view_shared_html(
         None => return Ok(axum::response::Html(shared_offline_page())),
     };
 
+    // Shared viewers have no auth token, so the HTML's refreshData() cannot call
+    // the authenticated /api/reports/{id}/data endpoint. Rewrite those fetches to
+    // the public, share-token-guarded data endpoint so a shared page shows LIVE
+    // data instead of the published (static) snapshot. Injected early in <head>
+    // so window.fetch is patched before refreshData() ever runs.
+    let data_proxy = format!(
+        r#"<script>(function(){{var _f=window.fetch;window.fetch=function(u,o){{try{{if(typeof u==='string'){{u=u.replace(/\/api\/reports\/\d+\/data/,'/api/share/{}/data');}}}}catch(e){{}}return _f.call(this,u,o);}};}})();</script>"#,
+        token
+    );
+    if let Some(pos) = html.find("<head>") {
+        html.insert_str(pos + "<head>".len(), &data_proxy);
+    } else if let Some(pos) = html.find("<html>") {
+        html.insert_str(pos + "<html>".len(), &data_proxy);
+    } else {
+        html.insert_str(0, &data_proxy);
+    }
+
     // Inject persisted refresh interval
     let interval_ms = (report.refresh_interval.unwrap_or(1) as u64) * 60 * 1000;
     html = html.replace("setInterval(refreshData, 60000)", &format!("setInterval(refreshData, {})", interval_ms));
@@ -1055,20 +1072,18 @@ async fn metric_param_defaults(
     crate::routes::query::param_defaults(&row.and_then(|(p,)| p))
 }
 
-/// Return live data for a report's datasources (re-executes SQL queries).
-/// This endpoint is called by the HTML page inside the iframe to get fresh data.
-pub async fn get_live_data(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Path(id): Path<i32>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
-    let report = load_owned_report(&state, id, &user).await?;
-
+/// Re-execute all of a report's datasource SQL queries and return fresh rows.
+/// Shared by the authenticated `/data` endpoint and the public share `/data`
+/// endpoint, so both paths return equally live data.
+async fn fetch_report_datasets(
+    state: &AppState,
+    report: &Report,
+    params: &HashMap<String, String>,
+) -> Result<Vec<serde_json::Value>, (StatusCode, String)> {
     let report_ds: Vec<ReportDataSource> = sqlx::query_as::<_, ReportDataSource>(
         "SELECT * FROM report_datasources WHERE report_id = ?"
     )
-    .bind(id)
+    .bind(report.id)
     .fetch_all(&state.db)
     .await
     .map_err(crate::routes::internal_error)?;
@@ -1076,7 +1091,7 @@ pub async fn get_live_data(
     // Runtime filter values from the request override the stored global-filter
     // values (interactive controls in the rendered dashboard pass `f_<key>`).
     // Passing None/empty leaves the stored values in effect.
-    let effective_report_filters = apply_runtime_filter_values(&report.report_filters, &params);
+    let effective_report_filters = apply_runtime_filter_values(&report.report_filters, params);
 
     // The same `f_<name>` request params also feed metric SQL placeholders
     // ({{name}} / [[ ]] blocks). Coerce each to a scalar value keyed by name.
@@ -1111,11 +1126,11 @@ pub async fn get_live_data(
             );
             // Metric parameter values: the metric's defaults overlaid with any
             // runtime request values (by param name).
-            let mut param_values = metric_param_defaults(&state, ds.metric_id).await;
+            let mut param_values = metric_param_defaults(state, ds.metric_id).await;
             for (k, v) in &request_param_values {
                 param_values.insert(k.clone(), v.clone());
             }
-            match crate::routes::query::execute_metric_sql(&state, &source, &ds.sql_query, &param_values, &filters).await {
+            match crate::routes::query::execute_metric_sql(state, &source, &ds.sql_query, &param_values, &filters).await {
                 Ok(result) => serde_json::to_value(&result.rows).unwrap_or(serde_json::Value::Array(vec![])),
                 Err(_) => ds.result_cache.clone().unwrap_or(serde_json::Value::Array(vec![])),
             }
@@ -1130,6 +1145,47 @@ pub async fn get_live_data(
         }));
     }
 
+    Ok(results)
+}
+
+/// Return live data for a report's datasources (re-executes SQL queries).
+/// This endpoint is called by the HTML page inside the iframe to get fresh data.
+pub async fn get_live_data(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i32>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let report = load_owned_report(&state, id, &user).await?;
+    let results = fetch_report_datasets(&state, &report, &params).await?;
+    Ok(Json(results))
+}
+
+/// Public counterpart of `get_live_data` for shared links. Guarded by the
+/// unguessable share token instead of auth; only serves a published, public
+/// report. Returns the SAME live (re-executed) data so shared viewers see
+/// real-time numbers rather than the published HTML snapshot.
+pub async fn view_shared_data(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let report = sqlx::query_as::<_, Report>(
+        "SELECT * FROM reports WHERE share_token = ? AND share_public = 1",
+    )
+    .bind(&token)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(crate::routes::internal_error)?
+    .ok_or((StatusCode::NOT_FOUND, "Report not found or not public".to_string()))?;
+
+    // Publishing is the public-visibility gate — an unpublished/offline report
+    // exposes no live data.
+    if report.status.as_deref() != Some("published") {
+        return Ok(Json(vec![]));
+    }
+
+    let results = fetch_report_datasets(&state, &report, &params).await?;
     Ok(Json(results))
 }
 

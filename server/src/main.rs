@@ -254,6 +254,7 @@ async fn main() {
         .route("/api/chat", get(routes::chat::ws_handler))
         .route("/api/share/{token}", get(routes::reports::view_shared))
         .route("/api/share/{token}/html", get(routes::reports::view_shared_html))
+        .route("/api/share/{token}/data", get(routes::reports::view_shared_data))
         .route("/api/auth/login", post(routes::auth::login))
         .route("/api/auth/register", post(routes::auth::register))
         .route("/api/auth/me", get(routes::auth::me))
