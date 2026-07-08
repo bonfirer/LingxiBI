@@ -622,7 +622,7 @@ export default function ConversationsPage() {
                         <span className="text-[9px] text-gray-500 uppercase tracking-wide font-medium">
                           {t('conv.queryResults')}
                         </span>
-                        {msg.pools.length > 1 && (
+                        {msg.pools.length > 0 && (
                           <BatchSaveButton pools={msg.pools} metrics={metrics} t={t} />
                         )}
                       </div>
