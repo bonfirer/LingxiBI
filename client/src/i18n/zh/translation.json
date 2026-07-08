@@ -417,6 +417,7 @@
     "testOk": "查询成功，返回 {{count}} 行",
     "needDatasource": "请先配置数据源",
     "favoritedAt": "收藏于",
+    "deleteInUse": "该指标已被报表数据源使用，无法删除。请先在相关报表中移除该指标后再试。",
     "groupNamePlaceholder": "分组名称，如：核心指标",
     "ungrouped": "未分组",
     "emptyGroup": "该分组暂无指标",

@@ -338,6 +338,20 @@ pub async fn remove(
 ) -> Result<StatusCode, (StatusCode, String)> {
     load_owned_metric(&state, id, &user).await?;
 
+    // Refuse deletion while the metric is still linked to any report datasource.
+    // Those report datasets reference the metric via `report_datasources.metric_id`;
+    // deleting the metric would orphan them. The frontend maps the `metric-in-use`
+    // sentinel to a localized message.
+    let (in_use,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM report_datasources WHERE metric_id = ?")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(internal_error)?;
+    if in_use > 0 {
+        return Err((StatusCode::CONFLICT, "metric-in-use".to_string()));
+    }
+
     sqlx::query("DELETE FROM metric_pools WHERE id = ?")
         .bind(id)
         .execute(&state.db)

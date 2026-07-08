@@ -417,6 +417,7 @@
     "testOk": "Query succeeded, {{count}} rows returned",
     "needDatasource": "Configure a data source first",
     "favoritedAt": "Saved",
+    "deleteInUse": "This metric is used by a report datasource and cannot be deleted. Remove it from the related report(s) first.",
     "groupNamePlaceholder": "Group name, e.g. Core KPIs",
     "ungrouped": "Ungrouped",
     "emptyGroup": "No metrics in this group yet",

@@ -334,7 +334,9 @@ export default function MetricsPage() {
       setSearchParams({});
       await fetchAllAndNotify();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('errors.deleteFailed'));
+      const msg = e instanceof Error ? e.message : '';
+      // Backend refuses deletion of a metric still linked to a report datasource.
+      setError(msg.includes('metric-in-use') ? t('metrics.deleteInUse') : (msg || t('errors.deleteFailed')));
     }
   };
 
