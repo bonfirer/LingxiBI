@@ -285,7 +285,7 @@ export function Select({
   disabled = false,
   size = 'md',
 }: {
-  value: string | number;
+  value: string | number | undefined;
   onChange: (value: string) => void;
   children: ReactNode;
   className?: string;
