@@ -115,7 +115,7 @@ export default function EasterEgg() {
             DATA MODE
           </div>
           <div className="text-amber-200/70 text-xs mt-3 font-mono tracking-wide">
-            crafted with curiosity · made by Kiro &amp; Macro
+            crafted with curiosity · made by Kiro &amp; Marco
           </div>
         </div>
       </div>

@@ -338,9 +338,9 @@ lingxibi/
 
 ## 📄 许可证
 
-[MIT License](LICENSE) © 2026 Macro
+[MIT License](LICENSE) © 2026 Marco
 
 <div align="center">
 <br/>
-<sub>用 🦀 Rust 与 ⚛️ React 构建 · Powered by AI · Ethan</sub>
+<sub>用 🦀 Rust 与 ⚛️ React 构建 · Powered by AI · Marco</sub>
 </div>

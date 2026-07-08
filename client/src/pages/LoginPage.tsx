@@ -362,7 +362,7 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
         </form>
 
         <p className="text-center text-[9px] text-gray-700 mt-6 tracking-wide">
-          Powered by AI · Ethan ·{' '}
+          Powered by AI · Marco ·{' '}
           <a
             href="mailto:macrogroot@outlook.com"
             className="text-gray-600 hover:text-amber-500/80 transition-colors"

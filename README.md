@@ -340,9 +340,9 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow and g
 
 ## 📄 License
 
-[MIT License](LICENSE) © 2026 Macro
+[MIT License](LICENSE) © 2026 Marco
 
 <div align="center">
 <br/>
-<sub>Built with 🦀 Rust and ⚛️ React · Powered by AI · Ethan</sub>
+<sub>Built with 🦀 Rust and ⚛️ React · Powered by AI · Marco</sub>
 </div>
