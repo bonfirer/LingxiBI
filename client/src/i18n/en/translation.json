@@ -112,6 +112,11 @@
       "title": "Ask a question about your data",
       "description": "Describe what you want to analyze. AI will generate SQL data pools, and you can combine them into reports."
     },
+    "hint": {
+      "title": "Not sure how to generate a report?",
+      "body": "First save the queries generated in the conversation to the Metrics Library, then pick them from the library to combine into a report when creating one.",
+      "short": "Save queries to the Metrics Library first, then build reports from it"
+    },
     "placeholder": "Describe the analysis or report you need...",
     "connected": "Connected",
     "reconnecting": "Reconnecting...",

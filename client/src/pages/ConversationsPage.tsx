@@ -18,6 +18,7 @@ import {
   ChartBar,
   MagnifyingGlass,
   List,
+  Lightbulb,
 } from '@phosphor-icons/react';
 import { useWebSocket, type WSMessage } from '../hooks/useWebSocket';
 import { conversationsApi, datasourcesApi, queryApi, metricsApi, metricGroupsApi, type Conversation, type Message, type DataSource, type MetricGroup, type MetricPool, type MetricParam } from '../lib/api';
@@ -521,6 +522,11 @@ export default function ConversationsPage() {
                 {t('conv.description')}
               </p>
             </div>
+          </div>
+          {/* Workflow hint: save metrics first, then build reports */}
+          <div className="hidden md:flex flex-1 items-center justify-center gap-1.5 min-w-0 px-2">
+            <Lightbulb size={13} weight="fill" className="text-amber-400 flex-shrink-0 animate-pulse" />
+            <span className="text-[11px] text-gray-400 truncate">{t('conv.hint.short')}</span>
           </div>
           {/* Datasource selector */}
           {datasources.length > 0 && (
