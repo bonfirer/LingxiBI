@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -127,8 +127,20 @@ export default function MetricsPage() {
     window.dispatchEvent(new Event('metrics-updated'));
   }, [fetchAll]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  // Guard against duplicate initial loads: react-i18next's `t` identity can
+  // change once translations finish loading, which rebuilds `fetchAll` and
+  // would otherwise fire the list requests a second time.
+  const didInitRef = useRef(false);
+  useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
+    fetchAll();
+  }, [fetchAll]);
 
+  // Tracks which metric id's detail has already been fetched, to dedup
+  // duplicate requests from StrictMode's dev double-invoke and same-id
+  // re-renders.
+  const loadedDetailIdRef = useRef<number | null>(null);
   // Load detail data when the selected metric changes.
   //
   // The metrics *list* no longer includes the heavy `result_cache`, so we fetch
@@ -139,8 +151,13 @@ export default function MetricsPage() {
     setPage(1); // Reset pagination
     if (!selectedId) {
       setDetailData(null);
+      loadedDetailIdRef.current = null;
       return;
     }
+    // Skip if this metric's detail was already loaded (StrictMode double-invoke
+    // in dev, or unrelated re-renders that keep the same selectedId).
+    if (loadedDetailIdRef.current === selectedId) return;
+    loadedDetailIdRef.current = selectedId;
     let cancelled = false;
     setDetailLoading(true);
     metricsApi.get(selectedId)

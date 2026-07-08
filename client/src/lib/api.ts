@@ -385,9 +385,22 @@ export const metricGroupsApi = {
 
 // ── Metric Pools ──
 
+// Dedup concurrent detail fetches for the same metric id. Multiple mounted
+// components (e.g. MetricsPage detail + the always-on AIPanel) read the same
+// `?id=` param and would otherwise each fire an identical GET /metrics/:id.
+// We share the in-flight promise and drop it once settled, so later refreshes
+// still hit the network.
+const inflightMetricGet = new Map<number, Promise<MetricPool>>();
+
 export const metricsApi = {
   list: () => request<MetricPool[]>('/metrics'),
-  get: (id: number) => request<MetricPool>(`/metrics/${id}`),
+  get: (id: number) => {
+    const existing = inflightMetricGet.get(id);
+    if (existing) return existing;
+    const p = request<MetricPool>(`/metrics/${id}`).finally(() => inflightMetricGet.delete(id));
+    inflightMetricGet.set(id, p);
+    return p;
+  },
   create: (payload: CreateMetricPayload) =>
     request<MetricPool>('/metrics', { method: 'POST', body: JSON.stringify(payload) }),
   update: (id: number, payload: { name?: string; description?: string; sql_query?: string; group_id?: number | null; params?: MetricParam[] | null }) =>

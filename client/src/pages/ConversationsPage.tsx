@@ -151,11 +151,43 @@ export default function ConversationsPage() {
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Only reload after polling when we actually observed an in-progress
+    // generation finish. Without this, an already-idle conversation would be
+    // fetched twice (initial reload + a redundant post-poll reload).
+    let sawGenerating = false;
 
     const reload = async () => {
       try {
         const msgs = await conversationsApi.getMessages(activeId);
-        if (!cancelled) setMessages(mapDbMessages(msgs));
+        if (cancelled) return;
+        const mapped = mapDbMessages(msgs);
+        // mapDbMessages defaults every pool's row count to 0 (the DB message
+        // metadata only carries pool ids). Fetch the real row_count FIRST and
+        // render once with correct values — rendering the 0 placeholder first
+        // and patching afterwards causes a visible "0 -> N" flicker on reload.
+        const poolIds = Array.from(
+          new Set(mapped.flatMap((m) => m.pools?.map((p) => p.id) ?? []).filter((id) => id > 0)),
+        );
+        if (poolIds.length > 0) {
+          const counts = await Promise.all(
+            poolIds.map(async (id) => {
+              try {
+                const p = await queryApi.getPool(id);
+                return [id, p.row_count ?? 0] as const;
+              } catch {
+                return [id, 0] as const;
+              }
+            }),
+          );
+          if (cancelled) return;
+          const countMap = new Map(counts);
+          for (const m of mapped) {
+            if (m.pools) {
+              m.pools = m.pools.map((p) => (countMap.has(p.id) ? { ...p, rows: countMap.get(p.id)! } : p));
+            }
+          }
+        }
+        if (!cancelled) setMessages(mapped);
       } catch {
         /* silent */
       }
@@ -168,11 +200,14 @@ export default function ConversationsPage() {
         if (cancelled) return;
         if (s.generation_status === 'generating') {
           setStreaming(true);
+          sawGenerating = true;
           timer = setTimeout(poll, 2000);
         } else {
           setStreaming(false);
-          await reload();
-          fetchConversations();
+          if (sawGenerating) {
+            await reload();
+            fetchConversations();
+          }
           if (s.generation_status === 'failed' && s.generation_error && !cancelled) {
             setMessages((prev) => [
               ...prev,
