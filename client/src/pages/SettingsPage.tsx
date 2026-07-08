@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { FloppyDisk, Lightning, Check, X, CaretDown, Sliders, Users, Plus, Trash } from '@phosphor-icons/react';
 import { llmConfigApi, usersApi, type LLMConfig, type UpdateLLMConfigPayload, type User } from '../lib/api';
 import { getCurrentUser, isAdmin } from '../lib/currentUser';
+import { Select } from '../components/ui';
 
 // ── Provider presets ──
 
@@ -220,26 +221,19 @@ export default function SettingsPage() {
             <label className="text-[11px] font-medium text-gray-400">
               {t('settings.provider')}
             </label>
-            <div className="relative">
-              <select
-                value={config.provider}
-                onChange={(e) => handleProviderChange(e.target.value)}
-                className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium appearance-none cursor-pointer"
-              >
-                <option value="openai">{t('settings.providerOpenai')}</option>
-                <option value="deepseek">{t('settings.providerDeepseek')}</option>
-                <option value="anthropic">{t('settings.providerAnthropic')}</option>
-                <option value="hunyuan">{t('settings.providerHunyuan')}</option>
-                <option value="zhipu">{t('settings.providerZhipu')}</option>
-                <option value="alibaba">{t('settings.providerAlibaba')}</option>
-                <option value="ollama">{t('settings.providerOllama')}</option>
-                <option value="custom">{t('settings.providerCustom')}</option>
-              </select>
-              <CaretDown
-                size={12}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"
-              />
-            </div>
+            <Select
+              value={config.provider}
+              onChange={(v) => handleProviderChange(v)}
+            >
+              <option value="openai">{t('settings.providerOpenai')}</option>
+              <option value="deepseek">{t('settings.providerDeepseek')}</option>
+              <option value="anthropic">{t('settings.providerAnthropic')}</option>
+              <option value="hunyuan">{t('settings.providerHunyuan')}</option>
+              <option value="zhipu">{t('settings.providerZhipu')}</option>
+              <option value="alibaba">{t('settings.providerAlibaba')}</option>
+              <option value="ollama">{t('settings.providerOllama')}</option>
+              <option value="custom">{t('settings.providerCustom')}</option>
+            </Select>
           </div>
 
           <div className="space-y-1.5 mb-4">
@@ -278,26 +272,20 @@ export default function SettingsPage() {
 
             {/* Dropdown for preset models */}
             {availableModels.length > 0 && !isCustomModel && (
-              <div className="relative">
-                <select
-                  value={config.model}
-                  onChange={(e) => handleModelSelect(e.target.value)}
-                  className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono focus:outline-none focus:border-amber-500/50 transition-premium appearance-none cursor-pointer"
-                >
-                  {availableModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                  <option value="__custom__" className="text-amber-500">
-                    — {t('settings.customModel')} —
+              <Select
+                value={config.model}
+                onChange={(v) => handleModelSelect(v)}
+                className="w-full font-mono"
+              >
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
                   </option>
-                </select>
-                <CaretDown
-                  size={12}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none"
-                />
-              </div>
+                ))}
+                <option value="__custom__" className="text-amber-500">
+                  — {t('settings.customModel')} —
+                </option>
+              </Select>
             )}
 
             {/* Text input for custom model */}
@@ -554,10 +542,10 @@ function UsersPanel() {
           <input className={inputCls} placeholder={t('settings.users.username')} value={username} onChange={(e) => setUsername(e.target.value)} />
           <input className={inputCls} placeholder={t('settings.users.displayName')} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
           <input className={inputCls} type="password" placeholder={t('settings.users.password')} value={password} onChange={(e) => setPassword(e.target.value)} />
-          <select className={inputCls} value={role} onChange={(e) => setRole(e.target.value)}>
+          <Select value={role} onChange={(v) => setRole(v)}>
             <option value="member">{t('settings.users.roleMember')}</option>
             <option value="admin">{t('settings.users.roleAdmin')}</option>
-          </select>
+          </Select>
           <div className="col-span-2 flex justify-end gap-2">
             <button onClick={() => setShowNew(false)} className="text-[11px] text-gray-400 hover:text-gray-200 px-3 py-1.5 rounded-md border border-obsidian-700">
               {t('common.cancel')}

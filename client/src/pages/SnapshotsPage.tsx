@@ -4,7 +4,7 @@ import { Camera, Plus, Trash, Clock, ArrowUp, ArrowDown, Minus, List } from '@ph
 import { useSnapshotStore } from '../stores/snapshotStore';
 import { metricsApi } from '../lib/api';
 import type { MetricPool, MetricSnapshot, SnapshotSchedule } from '../lib/types';
-import { ConfirmDialog } from '../components/ui';
+import { ConfirmDialog, Select } from '../components/ui';
 
 export default function SnapshotsPage() {
   const { t } = useTranslation();
@@ -805,31 +805,31 @@ function CreateScheduleModal({
           <div className="space-y-3">
             <div>
               <label className="text-[10px] text-gray-500 block mb-1">{t('snapshots.selectMetric')}</label>
-              <select
+              <Select
                 value={formMetricId ?? ''}
-                onChange={(e) => onMetricChange(e.target.value ? parseInt(e.target.value) : '')}
-                className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-colors"
+                onChange={(v) => onMetricChange(v ? parseInt(v) : '')}
+                size="sm"
               >
                 <option value="">{t('snapshots.selectMetric')}</option>
                 {metrics.map((m) => (
                   <option key={m.id} value={m.id}>{m.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             <div>
               <label className="text-[10px] text-gray-500 block mb-1">{t('snapshots.scheduleType')}</label>
-              <select
+              <Select
                 value={formType}
-                onChange={(e) => onTypeChange(e.target.value)}
-                className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-colors"
+                onChange={(v) => onTypeChange(v)}
+                size="sm"
               >
                 <option value="hourly">{t('snapshots.hourly')}</option>
                 <option value="daily">{t('snapshots.daily')}</option>
                 <option value="weekly">{t('snapshots.weekly')}</option>
                 <option value="monthly">{t('snapshots.monthly')}</option>
                 <option value="cron">{t('snapshots.cron')}</option>
-              </select>
+              </Select>
             </div>
 
             {formType === 'cron' && (

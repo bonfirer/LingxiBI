@@ -32,7 +32,7 @@ import {
   type QueryResult,
   type User,
 } from '../lib/api';
-import { PageHeader, ErrorBanner, EmptyState, StatusDot, ConfirmDialog } from '../components/ui';
+import { PageHeader, ErrorBanner, EmptyState, StatusDot, ConfirmDialog, Select } from '../components/ui';
 import KnowledgeBasePanel from '../components/KnowledgeBasePanel';
 import { useDataSourceStore } from '../stores/datasourceStore';
 import { isAdmin } from '../lib/currentUser';
@@ -1721,12 +1721,11 @@ function DataSourceForm({
         </div>
         <div className="space-y-1.5">
           <label className="text-[11px] font-medium text-gray-400">{t('datasources.databaseType')}</label>
-          <select value={form.db_type} onChange={(e) => { const t = e.target.value; setForm({ ...form, db_type: t, port: DEFAULT_PORTS[t] ?? 3306 }); }}
-            className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium">
+          <Select value={form.db_type} onChange={(v) => { setForm({ ...form, db_type: v, port: DEFAULT_PORTS[v] ?? 3306 }); }}>
             <option value="mysql">{t('datasources.dbTypeMysql')}</option>
             <option value="postgresql">{t('datasources.dbTypePostgresql')}</option>
             <option value="oracle">{t('datasources.dbTypeOracle')}</option>
-          </select>
+          </Select>
         </div>
         <div className="space-y-1.5">
           <label className="text-[11px] font-medium text-gray-400">{t('datasources.host')}</label>

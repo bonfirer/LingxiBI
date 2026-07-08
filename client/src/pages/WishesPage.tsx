@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Sparkle, Trash, Plus, CheckCircle, XCircle, Clock, Spinner } from '@phosphor-icons/react';
-import { PageHeader, EmptyState, Card, ConfirmDialog } from '../components/ui';
+import { PageHeader, EmptyState, Card, ConfirmDialog, Select } from '../components/ui';
 import { wishesApi } from '../lib/api';
 import type { Wish } from '../lib/types';
 
@@ -111,15 +111,14 @@ export default function WishesPage() {
               maxLength={255}
               className="md:col-span-3 bg-obsidian-950 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
             />
-            <select
+            <Select
               value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-              className="bg-obsidian-950 border border-obsidian-700 rounded-lg px-3 py-2 text-xs text-gray-200 focus:outline-none focus:border-amber-500/50"
+              onChange={(v) => setForm({ ...form, category: v })}
             >
               {CATEGORIES.map((c) => (
                 <option key={c} value={c}>{t(`wishes.category.${c}`)}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <textarea
             value={form.content}
@@ -170,15 +169,16 @@ export default function WishesPage() {
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {isAdmin && (
-                    <select
+                    <Select
                       value={wish.status}
-                      onChange={(e) => handleStatusChange(wish, e.target.value)}
-                      className="bg-obsidian-950 border border-obsidian-700 rounded-lg px-2 py-1.5 text-[10px] text-gray-200 focus:outline-none focus:border-amber-500/50"
+                      onChange={(v) => handleStatusChange(wish, v)}
+                      size="sm"
+                      className="w-auto"
                     >
                       {STATUSES.map((s) => (
                         <option key={s} value={s}>{t(`wishes.status.${s}`)}</option>
                       ))}
-                    </select>
+                    </Select>
                   )}
                   <button
                     onClick={() => setConfirmDeleteId(wish.id)}

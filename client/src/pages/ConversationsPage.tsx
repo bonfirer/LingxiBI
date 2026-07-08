@@ -22,7 +22,7 @@ import {
 } from '@phosphor-icons/react';
 import { useWebSocket, type WSMessage } from '../hooks/useWebSocket';
 import { conversationsApi, datasourcesApi, queryApi, metricsApi, metricGroupsApi, type Conversation, type Message, type DataSource, type MetricGroup, type MetricPool, type MetricParam } from '../lib/api';
-import { EmptyState } from '../components/ui';
+import { EmptyState, Select } from '../components/ui';
 
 /** A query result pool shown in the conversation. `params` is present when the
  *  AI parameterized the query (uses {{name}} / [[ ]] placeholders). */
@@ -567,17 +567,18 @@ export default function ConversationsPage() {
           {datasources.length > 0 && (
             <div className="flex items-center gap-2 flex-shrink-0">
               <Database size={14} className="text-gray-500 hidden sm:block" />
-              <select
+              <Select
                 value={selectedDsId ?? ''}
-                onChange={(e) => { const v = parseInt(e.target.value) || null; setSelectedDsId(v); if (v) localStorage.setItem('conv-datasource-id', String(v)); else localStorage.removeItem('conv-datasource-id'); }}
-                className="bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-300 focus:outline-none focus:border-amber-500/50 transition-premium max-w-[40vw] sm:max-w-none"
+                onChange={(v) => { const id = parseInt(v) || null; setSelectedDsId(id); if (id) localStorage.setItem('conv-datasource-id', String(id)); else localStorage.removeItem('conv-datasource-id'); }}
+                size="sm"
+                className="max-w-[40vw] sm:max-w-none"
               >
                 {datasources.map((ds) => (
                   <option key={ds.id} value={ds.id}>
                     {ds.name} ({ds.db_type})
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
         </div>

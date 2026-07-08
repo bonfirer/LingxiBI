@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash, Check, X, Funnel } from '@phosphor-icons/react';
+import { Select } from './ui';
 import {
   reportsApi,
   type Report,
@@ -140,7 +141,7 @@ export function ReportFilters({ report, datasources, onClose, onApplied }: Props
   };
 
   const inputCls =
-    'bg-obsidian-900 border border-obsidian-700 rounded px-1.5 py-1 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50';
+    'bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
@@ -180,9 +181,9 @@ export function ReportFilters({ report, datasources, onClose, onApplied }: Props
                     placeholder={t('reportDetail.globalFilters.label')}
                     className={`${inputCls} w-32`}
                   />
-                  <select value={d.op} onChange={(e) => update(i, { op: e.target.value as Op })} className={inputCls}>
+                  <Select value={d.op} onChange={(v) => update(i, { op: v as Op })} size="sm" className="w-auto">
                     {OPS.map((op) => <option key={op} value={op}>{op}</option>)}
-                  </select>
+                  </Select>
                   {d.op === 'BETWEEN' ? (
                     <>
                       <input value={d.from} onChange={(e) => update(i, { from: e.target.value })} placeholder={t('reportDetail.filters.betweenFrom')} className={`${inputCls} w-24`} />

@@ -20,6 +20,7 @@ import { metricsApi, alertsApi } from '../lib/api';
 import type { MetricPool, AlertRule, AlertLog, AlertOperator } from '../lib/types';
 import SmtpModal from '../components/SmtpModal';
 import FeishuModal from '../components/FeishuModal';
+import { Select } from '../components/ui';
 
 const OPERATORS: { value: AlertOperator; label: string }[] = [
   { value: 'gt', label: '> 大于' },
@@ -477,17 +478,17 @@ function RuleEditor({
           </div>
           <div>
             <label className={labelCls}>{t('alerts.fields.metric')}</label>
-            <select className={inputCls} value={metricId} onChange={(e) => { setMetricId(e.target.value ? Number(e.target.value) : ''); setConditionColumn(''); }} disabled={!!rule}>
+            <Select value={metricId} onChange={(v) => { setMetricId(v ? Number(v) : ''); setConditionColumn(''); }} disabled={!!rule} size="sm">
               <option value="">{t('alerts.fields.selectMetric')}</option>
               {metrics.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+            </Select>
           </div>
           <div>
             <label className={labelCls}>{t('alerts.fields.column')}</label>
-            <select className={inputCls} value={conditionColumn} onChange={(e) => setConditionColumn(e.target.value)}>
+            <Select value={conditionColumn} onChange={(v) => setConditionColumn(v)} size="sm">
               <option value="">{t('alerts.fields.firstNumeric')}</option>
               {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            </Select>
           </div>
         </div>
 
@@ -496,9 +497,9 @@ function RuleEditor({
           <label className={labelCls}>{t('alerts.fields.condition')}</label>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500 whitespace-nowrap flex-shrink-0">{t('alerts.fields.conditionPrefix')}</span>
-            <select className={`${inputCls} w-40`} value={operator} onChange={(e) => setOperator(e.target.value as AlertOperator)}>
+            <Select className="w-40" value={operator} onChange={(v) => setOperator(v as AlertOperator)} size="sm">
               {OPERATORS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            </Select>
             <input className={`${inputCls} w-32`} type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
           </div>
         </div>
@@ -507,9 +508,9 @@ function RuleEditor({
         <div className="grid grid-cols-3 gap-3">
           <div>
             <label className={labelCls}>{t('alerts.fields.schedule')}</label>
-            <select className={inputCls} value={scheduleType} onChange={(e) => setScheduleType(e.target.value)}>
+            <Select value={scheduleType} onChange={(v) => setScheduleType(v)} size="sm">
               {SCHEDULE_TYPES.map((s) => <option key={s} value={s}>{t(`alerts.schedule.${s}`)}</option>)}
-            </select>
+            </Select>
           </div>
           {scheduleType === 'cron' && (
             <div>

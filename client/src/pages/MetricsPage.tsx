@@ -25,7 +25,7 @@ import {
   type MetricGroup,
   type DataSource,
 } from '../lib/api';
-import { PageHeader, ErrorBanner, EmptyState } from '../components/ui';
+import { PageHeader, ErrorBanner, EmptyState, Select } from '../components/ui';
 
 /** Extract distinct `{{name}}` placeholder names from metric SQL (also matches
  *  placeholders inside `[[ ]]` optional blocks). */
@@ -552,28 +552,28 @@ export default function MetricsPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-1">{t('metrics.datasource')}</label>
-                    <select
+                    <Select
                       value={nmDsId}
-                      onChange={(e) => { setNmDsId(e.target.value ? parseInt(e.target.value) : ''); setNmTestResult(null); }}
-                      className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium"
+                      onChange={(v) => { setNmDsId(v ? parseInt(v) : ''); setNmTestResult(null); }}
+                      size="sm"
                     >
                       {datasources.map((ds) => (
                         <option key={ds.id} value={ds.id}>{ds.name} ({ds.db_type})</option>
                       ))}
-                    </select>
+                    </Select>
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-1">{t('metrics.group')}</label>
-                    <select
+                    <Select
                       value={nmGroupId}
-                      onChange={(e) => setNmGroupId(e.target.value ? parseInt(e.target.value) : '')}
-                      className="w-full bg-obsidian-800 border border-obsidian-700 rounded-lg px-2.5 py-1.5 text-[11px] text-gray-200 focus:outline-none focus:border-amber-500/50 transition-premium"
+                      onChange={(v) => setNmGroupId(v ? parseInt(v) : '')}
+                      size="sm"
                     >
                       <option value="">{t('metrics.ungrouped')}</option>
                       {groups.map((g) => (
                         <option key={g.id} value={g.id}>{g.name}</option>
                       ))}
-                    </select>
+                    </Select>
                   </div>
                 </div>
 

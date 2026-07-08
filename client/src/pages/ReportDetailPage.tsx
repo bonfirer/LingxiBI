@@ -1318,6 +1318,8 @@ function LoadingMessages({ t }: { t: (k: string) => string }) {
 // ── Custom Refresh Interval Picker (dark themed dropdown) ──
 function RefreshIntervalPicker({ value, onChange, t }: { value: number; onChange: (v: number) => void; t: (k: string) => string }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [panelPos, setPanelPos] = useState({ top: 0, right: 0 });
   const options = [
     { value: 0, label: t('reportDetail.refresh.off') },
     { value: 1, label: `1 ${t('reportDetail.refresh.min')}` },
@@ -1328,9 +1330,18 @@ function RefreshIntervalPicker({ value, onChange, t }: { value: number; onChange
   ];
   const current = options.find((o) => o.value === value) || options[5];
 
+  // Position the panel via fixed coordinates so it escapes any ancestor
+  // with overflow-x-auto / overflow-hidden (e.g. the top toolbar).
+  useEffect(() => {
+    if (!open || !btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setPanelPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+  }, [open]);
+
   return (
     <div className="relative">
       <button
+        ref={btnRef}
         onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 text-[10px] text-gray-400 hover:text-gray-200 border border-obsidian-700 px-2.5 py-1.5 rounded-md transition-premium"
       >
@@ -1341,12 +1352,15 @@ function RefreshIntervalPicker({ value, onChange, t }: { value: number; onChange
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 bg-obsidian-900 border border-obsidian-700 rounded-lg shadow-2xl py-1 min-w-[120px]">
+          <div
+            className="fixed z-50 bg-obsidian-900 border border-obsidian-700 rounded-lg shadow-2xl py-1"
+            style={{ top: panelPos.top, right: panelPos.right, width: 'max-content' }}
+          >
             {options.map((opt) => (
               <button
                 key={opt.value}
                 onClick={() => { onChange(opt.value); setOpen(false); }}
-                className={`w-full text-left px-3 py-1.5 text-[10px] transition-premium ${
+                className={`block whitespace-nowrap text-left px-3 py-1.5 text-[10px] transition-premium ${
                   opt.value === value
                     ? 'text-amber-500 bg-amber-500/10'
                     : 'text-gray-400 hover:text-gray-200 hover:bg-obsidian-800'

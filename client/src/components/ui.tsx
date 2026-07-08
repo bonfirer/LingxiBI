@@ -1,5 +1,5 @@
-import { type ReactNode, Component, useEffect, useRef, useState } from 'react';
-import { X, WarningCircle } from '@phosphor-icons/react';
+import { type ReactNode, Children, Component, isValidElement, useEffect, useRef, useState } from 'react';
+import { CaretDown, X, WarningCircle } from '@phosphor-icons/react';
 
 // ── Error Boundary ──
 interface ErrorBoundaryProps { children: ReactNode; }
@@ -252,6 +252,202 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Select (accessible dark-themed dropdown) ──
+// Replaces native <select> across the app for a unified, coordinated look.
+// Supports children as <option> elements (same API surface as native select),
+// full keyboard navigation, click-outside dismissal, and ARIA semantics.
+interface ParsedOption {
+  value: string;
+  label: ReactNode;
+  className?: string;
+}
+
+function parseOptions(children: ReactNode): ParsedOption[] {
+  const options: ParsedOption[] = [];
+  Children.toArray(children).forEach((child) => {
+    if (isValidElement(child) && child.type === 'option') {
+      const props = child.props as { value: string; children: ReactNode; className?: string };
+      options.push({ value: String(props.value ?? ''), label: props.children, className: props.className });
+    }
+  });
+  return options;
+}
+
+export function Select({
+  value,
+  onChange,
+  children,
+  className = 'w-full',
+  disabled = false,
+  size = 'md',
+}: {
+  value: string | number;
+  onChange: (value: string) => void;
+  children: ReactNode;
+  className?: string;
+  disabled?: boolean;
+  size?: 'sm' | 'md';
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [panelPos, setPanelPos] = useState({ top: 0, left: 0, minWidth: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const options = parseOptions(children);
+  const strValue = String(value);
+  const selectedIndex = options.findIndex((o) => o.value === strValue);
+  const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : null;
+
+  const sizeCls = size === 'sm'
+    ? 'px-2.5 py-1.5 text-[11px]'
+    : 'px-3 py-2 text-xs';
+
+  // Position the panel via fixed coordinates so it escapes any ancestor
+  // with overflow-auto / overflow-hidden (e.g. toolbars, scroll areas).
+  // Also close on scroll or resize since fixed positioning doesn't track.
+  useEffect(() => {
+    if (!open) return;
+    const measure = () => {
+      if (!triggerRef.current) return;
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPanelPos({ top: rect.bottom + 4, left: rect.left, minWidth: rect.width });
+    };
+    measure();
+    const onScroll = () => setOpen(false);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [open]);
+
+  // Close on click outside
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  // Scroll active option into view
+  useEffect(() => {
+    if (!open || activeIndex < 0 || !listRef.current) return;
+    const el = listRef.current.children[activeIndex] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex, open]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (disabled) return;
+    switch (e.key) {
+      case 'Enter':
+      case ' ':
+      case 'Spacebar':
+        e.preventDefault();
+        if (!open) {
+          setOpen(true);
+          setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+        }
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        if (!open) {
+          setOpen(true);
+          setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+        } else {
+          setActiveIndex((i) => Math.min(i + 1, options.length - 1));
+        }
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        if (open) setActiveIndex((i) => Math.max(i - 1, 0));
+        break;
+      case 'Escape':
+        if (open) {
+          e.preventDefault();
+          setOpen(false);
+        }
+        break;
+      case 'Tab':
+        if (open) setOpen(false);
+        break;
+    }
+  };
+
+  const handleSelect = (val: string) => {
+    onChange(val);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={`relative ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (!open) setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+          setOpen(!open);
+        }}
+        onKeyDown={handleKeyDown}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`w-full flex items-center justify-between gap-2 cursor-pointer bg-obsidian-800 border border-obsidian-700 rounded-lg text-gray-200 focus:border-amber-500/50 focus:outline-none transition-premium ${sizeCls}`}
+      >
+        <span className="truncate text-left">{selectedLabel ?? '\u00A0'}</span>
+        <CaretDown
+          size={size === 'sm' ? 11 : 12}
+          className={`text-gray-500 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            ref={listRef}
+            role="listbox"
+            className="fixed z-50 bg-obsidian-900 border border-obsidian-700 rounded-lg shadow-2xl py-1 max-h-60 overflow-y-auto scrollbar-thin"
+            style={{ top: panelPos.top, left: panelPos.left, minWidth: panelPos.minWidth, width: 'max-content' }}
+          >
+            {options.map((opt, i) => {
+              const isSelected = opt.value === strValue;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => handleSelect(opt.value)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`block whitespace-nowrap text-left px-3 transition-premium ${sizeCls} ${
+                    isSelected
+                      ? 'text-amber-500 bg-amber-500/10'
+                      : activeIndex === i
+                        ? 'text-gray-200 bg-obsidian-800'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-obsidian-800'
+                  } ${opt.className ?? ''}`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
