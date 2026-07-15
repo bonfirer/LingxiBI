@@ -21,7 +21,7 @@ export default {
         'data-amber': '#f59e0b',
       },
       fontFamily: {
-        sans: ['Geist Sans', 'Geist', 'Satoshi', 'system-ui', 'sans-serif'],
+        sans: ['AlibabaPuHuiTi', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'Geist Mono', 'ui-monospace', 'monospace'],
       },
       transitionTimingFunction: {
