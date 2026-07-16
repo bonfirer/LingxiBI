@@ -21,7 +21,19 @@ export default {
         'data-amber': '#f59e0b',
       },
       fontFamily: {
-        sans: ['AlibabaPuHuiTi', 'system-ui', 'sans-serif'],
+        sans: [
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'Segoe UI',
+          'Roboto',
+          'Helvetica Neue',
+          'Arial',
+          'PingFang SC',
+          'Hiragino Sans GB',
+          'Microsoft YaHei',
+          'sans-serif',
+        ],
         mono: ['JetBrains Mono', 'Geist Mono', 'ui-monospace', 'monospace'],
       },
       transitionTimingFunction: {

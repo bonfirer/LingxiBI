@@ -13,7 +13,6 @@
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@phosphor-icons/react": "^2.1.10",
     "autoprefixer": "^10.5.0",
-    "c1-alibaba-puhui-ti": "^1.0.0",
     "framer-motion": "^12.38.0",
     "i18next": "^26.0.8",
     "i18next-browser-languagedetector": "^8.2.1",

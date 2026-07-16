@@ -2,9 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { ErrorBoundary } from './components/ui'
-// Self-hosted fonts (bundled by Vite) — no external Google Fonts request.
-// Alibaba PuHuiTi (阿里巴巴普惠体) for UI text, JetBrains Mono for code.
-import 'c1-alibaba-puhui-ti/index.css'
+// UI text uses the native system font stack (no web-font download).
+// JetBrains Mono is bundled for code/monospace only.
 import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
 import '@fontsource/jetbrains-mono/600.css'
