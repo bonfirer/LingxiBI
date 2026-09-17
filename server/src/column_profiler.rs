@@ -174,8 +174,20 @@ async fn profile_mysql_column(
 async fn profile_postgres(state: &AppState, ds: &DataSource) -> Result<u32, String> {
     let pool = state.pool_cache.get_postgres(ds).await?;
 
-    let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_type = 'BASE TABLE'",
+    // Read the catalog rather than `information_schema`: the latter hides
+    // objects the connected role has no privilege on, which makes profiling
+    // silently no-op for read-only accounts without an explicit GRANT.
+    // Only real/partitioned tables are profiled — views and foreign tables
+    // would re-run their underlying query for every single aggregate.
+    let tables: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT c.oid::int8, n.nspname::text, c.relname::text
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relkind IN ('r', 'p')
+           AND NOT c.relispartition
+           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+           AND left(n.nspname, 3) <> 'pg_'
+         ORDER BY n.nspname, c.relname",
     )
     .fetch_all(&pool)
     .await
@@ -183,17 +195,36 @@ async fn profile_postgres(state: &AppState, ds: &DataSource) -> Result<u32, Stri
 
     let mut profiled = 0u32;
 
-    for (table_name,) in &tables {
-        let columns: Vec<(String, String)> = sqlx::query_as(
-            "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_name = $1 ORDER BY ordinal_position",
+    for (relid, schema_name, rel_name) in &tables {
+        // Column profiles are keyed by the same name introspection stores, so
+        // the AI can join them against the schema it was given.
+        let table_name = &crate::routes::datasources::pg_qualified_name(schema_name, rel_name);
+        // ...but SQL needs each identifier quoted separately.
+        let table_ref = format!("{}.{}", quoted_ident(schema_name), quoted_ident(rel_name));
+
+        // Looked up by oid: resolving a name via `regclass` needs USAGE on the
+        // schema, which a restricted role may not hold.
+        let columns: Vec<(String, String)> = match sqlx::query_as(
+            "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod)::text
+             FROM pg_attribute a
+             WHERE a.attrelid = $1::int8::oid
+               AND a.attnum > 0 AND NOT a.attisdropped
+             ORDER BY a.attnum",
         )
-        .bind(table_name)
+        .bind(relid)
         .fetch_all(&pool)
         .await
-        .map_err(|e| e.to_string())?;
+        {
+            Ok(cols) => cols,
+            Err(e) => {
+                // One unreadable table must not abort the whole profiling run.
+                tracing::debug!("skip profiling {}: {}", table_name, e);
+                continue;
+            }
+        };
 
         let row_count: Option<(i64,)> = sqlx::query_as(
-            &format!("SELECT COUNT(*) FROM {}", quoted_ident(table_name))
+            &format!("SELECT COUNT(*) FROM {}", table_ref)
         )
         .fetch_optional(&pool)
         .await
@@ -206,7 +237,7 @@ async fn profile_postgres(state: &AppState, ds: &DataSource) -> Result<u32, Stri
             let stats: Option<(i64, i64)> = sqlx::query_as(
                 &format!(
                     "SELECT COUNT(DISTINCT {col}), SUM(CASE WHEN {col} IS NULL THEN 1 ELSE 0 END) FROM {tbl}",
-                    col = quoted_ident(col_name), tbl = quoted_ident(table_name)
+                    col = quoted_ident(col_name), tbl = table_ref
                 )
             )
             .fetch_optional(&pool)
@@ -216,13 +247,19 @@ async fn profile_postgres(state: &AppState, ds: &DataSource) -> Result<u32, Stri
 
             let (distinct, nulls) = stats.unwrap_or((0, 0));
 
-            let is_numeric = matches!(data_type.as_str(), "integer" | "bigint" | "smallint" | "numeric" | "real" | "double precision");
+            // `format_type` includes modifiers (e.g. `numeric(10,2)`), so match
+            // on a prefix rather than the whole string.
+            let base_type = data_type.split('(').next().unwrap_or(data_type).trim();
+            let is_numeric = matches!(
+                base_type,
+                "smallint" | "integer" | "bigint" | "numeric" | "decimal" | "real" | "double precision" | "money"
+            );
 
-            let (min_val, max_val) = if is_numeric || data_type.contains("date") || data_type.contains("time") {
+            let (min_val, max_val) = if is_numeric || base_type.contains("date") || base_type.contains("time") {
                 let minmax: Option<(Option<String>, Option<String>)> = sqlx::query_as(
                     &format!(
                         "SELECT CAST(MIN({col}) AS TEXT), CAST(MAX({col}) AS TEXT) FROM {tbl}",
-                        col = quoted_ident(col_name), tbl = quoted_ident(table_name)
+                        col = quoted_ident(col_name), tbl = table_ref
                     )
                 )
                 .fetch_optional(&pool)
@@ -238,7 +275,7 @@ async fn profile_postgres(state: &AppState, ds: &DataSource) -> Result<u32, Stri
             let samples: Vec<(Option<String>,)> = sqlx::query_as(
                 &format!(
                     "SELECT CAST({col} AS TEXT) FROM {tbl} WHERE {col} IS NOT NULL GROUP BY {col} LIMIT {lim}",
-                    col = quoted_ident(col_name), tbl = quoted_ident(table_name), lim = sample_limit
+                    col = quoted_ident(col_name), tbl = table_ref, lim = sample_limit
                 )
             )
             .fetch_all(&pool)

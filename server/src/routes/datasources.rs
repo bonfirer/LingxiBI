@@ -560,124 +560,185 @@ async fn introspect_mysql(state: &AppState, ds: &DataSource) -> Result<SchemaInf
 
 async fn introspect_postgres(state: &AppState, ds: &DataSource) -> Result<SchemaInfo, String> {
     let pool = state.pool_cache.get_postgres(ds).await?;
+    pg_schema_from_pool(&pool).await
+}
 
-    let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT table_name FROM information_schema.tables
-         WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-         AND table_type = 'BASE TABLE'
-         ORDER BY table_name",
+pub(crate) async fn pg_schema_from_pool(pool: &sqlx::PgPool) -> Result<SchemaInfo, String> {
+    use std::collections::{HashMap, HashSet};
+
+    // Read the catalog directly instead of `information_schema`. The
+    // `information_schema` views only expose objects the connected role holds a
+    // privilege on, so a read-only account without an explicit GRANT sees zero
+    // rows and introspection silently returns nothing. `pg_catalog` is readable
+    // by every role and also lets us cover views, materialized views, foreign
+    // tables and non-`public` schemas.
+    let relations: Vec<(i64, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT c.oid::int8, n.nspname::text, c.relname::text, c.relkind::text,
+                obj_description(c.oid, 'pg_class')
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+           AND NOT c.relispartition
+           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+           AND left(n.nspname, 3) <> 'pg_'
+         ORDER BY n.nspname, c.relname",
     )
-    .fetch_all(&pool)
+    .fetch_all(pool)
     .await
     .map_err(|e| format!("PostgreSQL tables query: {}", e))?;
 
-    let mut schema = SchemaInfo { tables: Vec::new(), relationships: Vec::new() };
+    // All columns in one round trip, keyed by relation oid.
+    let all_columns: Vec<(i64, String, String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT a.attrelid::int8, a.attname::text,
+                format_type(a.atttypid, a.atttypmod)::text,
+                a.attnotnull, col_description(a.attrelid, a.attnum)
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE a.attnum > 0 AND NOT a.attisdropped
+           AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+           AND left(n.nspname, 3) <> 'pg_'
+         ORDER BY a.attrelid, a.attnum",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("PostgreSQL columns query: {}", e))?;
 
-    for (table_name,) in &tables {
-        // Get table comment
-        let table_comment: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT obj_description(c.oid) FROM pg_class c
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE c.relname = $1 AND n.nspname NOT IN ('pg_catalog', 'information_schema')",
-        )
-        .bind(table_name)
-        .fetch_optional(&pool)
-        .await
-        .unwrap_or(None);
-        let table_comment = table_comment.and_then(|(c,)| c).filter(|c| !c.is_empty());
-
-        let columns: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT column_name, data_type, is_nullable
-             FROM information_schema.columns
-             WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-             AND table_name = $1
-             ORDER BY ordinal_position",
-        )
-        .bind(table_name)
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| format!("PostgreSQL columns query: {}", e))?;
-
-        // Get column comments
-        let col_comments: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT a.attname, col_description(a.attrelid, a.attnum)
-             FROM pg_attribute a
-             JOIN pg_class c ON c.oid = a.attrelid
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE c.relname = $1 AND a.attnum > 0 AND NOT a.attisdropped
-             AND n.nspname NOT IN ('pg_catalog', 'information_schema')",
-        )
-        .bind(table_name)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-        let comment_map: std::collections::HashMap<&str, &str> = col_comments
-            .iter()
-            .filter_map(|(name, comment)| comment.as_deref().filter(|c| !c.is_empty()).map(|c| (name.as_str(), c)))
-            .collect();
-
-        // Get PK columns
-        let pk_cols: Vec<(String,)> = sqlx::query_as(
-            "SELECT kcu.column_name
-             FROM information_schema.table_constraints tc
-             JOIN information_schema.key_column_usage kcu
-               ON tc.constraint_name = kcu.constraint_name
-             WHERE tc.constraint_type = 'PRIMARY KEY'
-               AND tc.table_name = $1",
-        )
-        .bind(table_name)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-        let pk_set: std::collections::HashSet<&str> = pk_cols.iter().map(|(c,)| c.as_str()).collect();
-
-        let columns: Vec<ColumnInfo> = columns
-            .into_iter()
-            .map(|(name, data_type, nullable)| {
-                let comment = comment_map.get(name.as_str()).map(|c| c.to_string());
-                ColumnInfo {
-                    is_primary_key: pk_set.contains(name.as_str()),
-                    is_foreign_key: false,
-                    comment,
-                    name,
-                    data_type,
-                    nullable: nullable == "YES",
-                }
-            })
-            .collect();
-
-        schema.tables.push(TableInfo { name: table_name.clone(), comment: table_comment, columns });
+    let mut cols_by_rel: HashMap<i64, Vec<(String, String, bool, Option<String>)>> = HashMap::new();
+    for (relid, name, data_type, notnull, comment) in all_columns {
+        cols_by_rel
+            .entry(relid)
+            .or_default()
+            .push((name, data_type, notnull, comment));
     }
 
-    // FK relationships
-    let fks: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT
-            kcu.table_name,
-            kcu.column_name,
-            ccu.table_name AS foreign_table_name,
-            ccu.column_name AS foreign_column_name
-         FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu
-           ON tc.constraint_name = kcu.constraint_name
-         JOIN information_schema.constraint_column_usage ccu
-           ON tc.constraint_name = ccu.constraint_name
-         WHERE tc.constraint_type = 'FOREIGN KEY'
-           AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')",
+    // Primary keys, keyed by relation oid.
+    let pk_rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT i.indrelid::int8, a.attname::text
+         FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+         WHERE i.indisprimary
+           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+           AND left(n.nspname, 3) <> 'pg_'",
     )
-    .fetch_all(&pool)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut pks_by_rel: HashMap<i64, HashSet<String>> = HashMap::new();
+    for (relid, col) in pk_rows {
+        pks_by_rel.entry(relid).or_default().insert(col);
+    }
+
+    // Foreign keys from pg_constraint. Zipping conkey/confkey by ordinality keeps
+    // composite keys paired correctly (the old constraint_column_usage join
+    // produced a cross product) and joining on oid avoids mixing up
+    // same-named constraints in different schemas.
+    let fks: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT con.conrelid::int8,
+                src_ns.nspname::text, sa.attname::text,
+                tgt_ns.nspname::text, tgt.relname::text, ta.attname::text
+         FROM pg_constraint con
+         JOIN pg_class src ON src.oid = con.conrelid
+         JOIN pg_namespace src_ns ON src_ns.oid = src.relnamespace
+         JOIN pg_class tgt ON tgt.oid = con.confrelid
+         JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt.relnamespace
+         JOIN unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(src_att, tgt_att, ord) ON true
+         JOIN pg_attribute sa ON sa.attrelid = con.conrelid AND sa.attnum = k.src_att
+         JOIN pg_attribute ta ON ta.attrelid = con.confrelid AND ta.attnum = k.tgt_att
+         WHERE con.contype = 'f'
+           AND src_ns.nspname NOT IN ('pg_catalog', 'information_schema')
+           AND left(src_ns.nspname, 3) <> 'pg_'",
+    )
+    .fetch_all(pool)
     .await
     .map_err(|e| format!("PostgreSQL FK query: {}", e))?;
 
-    for (table, col, ref_table, ref_col) in &fks {
+    // FK columns per relation, so ColumnInfo.is_foreign_key is accurate.
+    let mut fk_cols_by_rel: HashMap<i64, HashSet<&str>> = HashMap::new();
+    for (relid, _, src_col, _, _, _) in &fks {
+        fk_cols_by_rel.entry(*relid).or_default().insert(src_col.as_str());
+    }
+
+    let mut schema = SchemaInfo { tables: Vec::new(), relationships: Vec::new() };
+
+    for (relid, nspname, relname, relkind, rel_comment) in &relations {
+        let empty_pk = HashSet::new();
+        let pk_set = pks_by_rel.get(relid).unwrap_or(&empty_pk);
+        let empty_fk = HashSet::new();
+        let fk_set = fk_cols_by_rel.get(relid).unwrap_or(&empty_fk);
+
+        let columns: Vec<ColumnInfo> = cols_by_rel
+            .remove(relid)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, data_type, notnull, comment)| ColumnInfo {
+                is_primary_key: pk_set.contains(&name),
+                is_foreign_key: fk_set.contains(name.as_str()),
+                comment: comment.filter(|c| !c.is_empty()),
+                name,
+                data_type,
+                nullable: !notnull,
+            })
+            .collect();
+
+        schema.tables.push(TableInfo {
+            name: pg_qualified_name(nspname, relname),
+            comment: pg_table_comment(relkind, rel_comment.as_deref()),
+            columns,
+        });
+    }
+
+    // Relationships use schema-qualified names on both ends so they line up
+    // with `schema.tables` entries.
+    let name_by_oid: HashMap<i64, String> = relations
+        .iter()
+        .map(|(oid, ns, rel, _, _)| (*oid, pg_qualified_name(ns, rel)))
+        .collect();
+
+    for (relid, _, src_col, tgt_ns, tgt_table, tgt_col) in &fks {
+        let Some(source_table) = name_by_oid.get(relid).cloned() else { continue };
         schema.relationships.push(Relationship {
-            source_table: table.clone(),
-            source_column: col.clone(),
-            target_table: ref_table.clone(),
-            target_column: ref_col.clone(),
+            source_table,
+            source_column: src_col.clone(),
+            target_table: pg_qualified_name(tgt_ns, tgt_table),
+            target_column: tgt_col.clone(),
         });
     }
 
     Ok(schema)
+}
+
+/// Table identifier as the AI (and generated SQL) should see it: bare name for
+/// `public`, `schema.table` everywhere else so queries resolve regardless of
+/// the connection's `search_path`.
+pub fn pg_qualified_name(schema: &str, table: &str) -> String {
+    if schema == "public" {
+        table.to_string()
+    } else {
+        format!("{}.{}", schema, table)
+    }
+}
+
+/// Keep the relation kind visible in the description so the AI knows it is
+/// querying a view rather than a base table.
+fn pg_table_comment(relkind: &str, comment: Option<&str>) -> Option<String> {
+    let kind_tag = match relkind {
+        "v" => Some("[view]"),
+        "m" => Some("[materialized view]"),
+        "f" => Some("[foreign table]"),
+        _ => None,
+    };
+    let comment = comment.filter(|c| !c.is_empty());
+    match (kind_tag, comment) {
+        (Some(tag), Some(c)) => Some(format!("{} {}", tag, c)),
+        (Some(tag), None) => Some(tag.to_string()),
+        (None, Some(c)) => Some(c.to_string()),
+        (None, None) => None,
+    }
 }
 
 async fn introspect_oracle(state: &AppState, ds: &DataSource) -> Result<SchemaInfo, String> {
@@ -795,4 +856,62 @@ async fn introspect_oracle(state: &AppState, ds: &DataSource) -> Result<SchemaIn
     })
     .await
     .map_err(|e| format!("Oracle spawn: {}", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualifies_only_non_public_schemas() {
+        assert_eq!(pg_qualified_name("public", "users"), "users");
+        assert_eq!(pg_qualified_name("sales", "invoices"), "sales.invoices");
+    }
+
+    #[test]
+    fn table_comment_marks_relation_kind() {
+        assert_eq!(pg_table_comment("r", Some("orders")), Some("orders".into()));
+        assert_eq!(pg_table_comment("r", None), None);
+        assert_eq!(pg_table_comment("v", None), Some("[view]".into()));
+        assert_eq!(pg_table_comment("m", Some("daily")), Some("[materialized view] daily".into()));
+        assert_eq!(pg_table_comment("r", Some("")), None);
+    }
+
+    /// Live check against a real PostgreSQL. Opt in with:
+    ///   PG_TEST_URL=postgres://user:pass@host:port/db cargo test pg_introspection -- --ignored
+    /// Creates its own objects in a throwaway schema and drops them afterwards.
+    #[tokio::test]
+    #[ignore]
+    async fn pg_introspection_covers_schemas_views_and_keys() {
+        let url = std::env::var("PG_TEST_URL").expect("PG_TEST_URL not set");
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+
+        let schema = pg_schema_from_pool(&pool).await.unwrap();
+        let names: Vec<&str> = schema.tables.iter().map(|t| t.name.as_str()).collect();
+
+        // Non-public schemas are qualified, views are included.
+        assert!(names.contains(&"sales.invoices"), "missing non-public table: {:?}", names);
+        assert!(names.contains(&"v_user_orders"), "missing view: {:?}", names);
+
+        let users = schema.tables.iter().find(|t| t.name == "users").unwrap();
+        assert_eq!(users.comment.as_deref(), Some("用户表"));
+        let id = users.columns.iter().find(|c| c.name == "id").unwrap();
+        assert!(id.is_primary_key && !id.nullable);
+        let email = users.columns.iter().find(|c| c.name == "email").unwrap();
+        assert!(email.nullable && !email.is_primary_key);
+
+        // Column types keep their modifiers.
+        let name_col = users.columns.iter().find(|c| c.name == "name").unwrap();
+        assert_eq!(name_col.data_type, "character varying(50)");
+
+        // FKs are schema-qualified on both ends and mark the source column.
+        assert!(schema.relationships.iter().any(|r| r.source_table == "orders"
+            && r.source_column == "user_id"
+            && r.target_table == "users"
+            && r.target_column == "id"));
+        assert!(schema.relationships.iter().any(|r| r.source_table == "sales.invoices"
+            && r.target_table == "orders"));
+        let orders = schema.tables.iter().find(|t| t.name == "orders").unwrap();
+        assert!(orders.columns.iter().find(|c| c.name == "user_id").unwrap().is_foreign_key);
+    }
 }
