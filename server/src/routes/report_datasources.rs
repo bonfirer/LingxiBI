@@ -102,15 +102,25 @@ pub async fn create(
     // If linking from a metric, copy its result_cache
     let (result_cache, row_count): (Option<serde_json::Value>, Option<i32>) =
         if let Some(mid) = payload.metric_id {
+            // The metric's cached rows get copied into this report, so the
+            // caller must be entitled to them: own the metric (admins bypass)
+            // AND have it belong to the datasource this dataset targets.
+            // Without these checks, enumerating metric ids leaked other users'
+            // cached result sets from datasources they had no grant for.
             let metric = sqlx::query_as::<_, MetricPool>("SELECT * FROM metric_pools WHERE id = ?")
                 .bind(mid)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(crate::routes::internal_error)?;
-            match metric {
-                Some(m) => (m.result_cache, m.row_count),
-                None => (None, None),
+                .map_err(crate::routes::internal_error)?
+                .ok_or((StatusCode::NOT_FOUND, "Metric not found".to_string()))?;
+            crate::routes::ensure_owner(&user, metric.owner_user_id)?;
+            if metric.datasource_id != payload.datasource_id {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Metric belongs to a different data source".to_string(),
+                ));
             }
+            (metric.result_cache, metric.row_count)
         } else {
             (None, None)
         };

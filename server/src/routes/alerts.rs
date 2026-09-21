@@ -57,10 +57,19 @@ async fn ensure_metric_owned(
 
 // ── SMTP config ──
 
-/// Get the SMTP config (password masked).
+/// Get the SMTP config (password masked). Admin-only: the host/port/username
+/// and from-address are shared infrastructure detail, and every sibling
+/// mutation here is already admin-gated.
 pub async fn get_smtp(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
+    load_smtp_json(&state).await
+}
+
+/// Shared read used by both the GET handler and the update handler's response.
+async fn load_smtp_json(state: &AppState) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let cfg = sqlx::query_as::<_, SmtpConfig>("SELECT * FROM smtp_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
@@ -83,7 +92,7 @@ pub async fn get_smtp(
         }
         None => serde_json::json!({
             "id": 1, "host": "", "port": 465, "username": "",
-            "password_set": false, "from_email": "", "from_name": "LingxiBI",
+            "password_set": false, "from_email": "", "from_name": "HISENSE LingxiBI",
             "use_tls": true, "enabled": false,
         }),
     };
@@ -109,7 +118,7 @@ pub async fn update_smtp(
         username: String::new(),
         password: String::new(),
         from_email: String::new(),
-        from_name: "LingxiBI".to_string(),
+        from_name: "HISENSE LingxiBI".to_string(),
         use_tls: true,
         enabled: false,
         created_at: None,
@@ -149,7 +158,7 @@ pub async fn update_smtp(
     .await
     .map_err(crate::routes::internal_error)?;
 
-    get_smtp(State(state)).await
+    load_smtp_json(&state).await
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -170,9 +179,9 @@ pub async fn test_smtp(
         .map_err(crate::routes::internal_error)?
         .ok_or((StatusCode::BAD_REQUEST, "SMTP not configured".to_string()))?;
 
-    let body = "<div style=\"font-family:Arial,sans-serif;padding:16px;\"><h2>✅ SMTP 测试成功</h2><p>如果你收到这封邮件，说明 LingxiBI 的邮件预警通道已正常工作。</p></div>";
+    let body = "<div style=\"font-family:Arial,sans-serif;padding:16px;\"><h2>✅ SMTP 测试成功</h2><p>如果你收到这封邮件，说明 HISENSE LingxiBI 的邮件预警通道已正常工作。</p></div>";
 
-    email::send_email(&cfg, &[payload.to.clone()], "LingxiBI — SMTP 测试", body, vec![])
+    email::send_email(&cfg, &[payload.to.clone()], "HISENSE LingxiBI — SMTP 测试", body, vec![])
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
@@ -184,9 +193,19 @@ pub async fn test_smtp(
 
 // ── Feishu config ──
 
-/// Get the Feishu config (secret masked).
+/// Get the Feishu config (secret masked). Admin-only — the webhook URL is
+/// itself a capability: anyone holding it can post into the org's chat.
 pub async fn get_feishu(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
+    load_feishu_json(&state).await
+}
+
+/// Shared read used by both the GET handler and the update handler's response.
+async fn load_feishu_json(
+    state: &AppState,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let cfg = sqlx::query_as::<_, FeishuConfig>("SELECT * FROM feishu_config WHERE id = 1")
         .fetch_optional(&state.db)
@@ -251,7 +270,7 @@ pub async fn update_feishu(
     .await
     .map_err(crate::routes::internal_error)?;
 
-    get_feishu(State(state)).await
+    load_feishu_json(&state).await
 }
 
 /// Send a test card to verify the Feishu webhook + signing secret.

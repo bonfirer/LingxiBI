@@ -129,15 +129,19 @@ pub async fn send_card(cfg: &FeishuConfig, card: Value) -> Result<(), String> {
     });
 
     // Attach signature fields when a secret is configured.
-    let secret = crate::crypto::decrypt(&cfg.secret);
-    if !secret.trim().is_empty() {
+    //
+    // `decrypt_checked` distinguishes "no secret configured" from "configured but
+    // undecryptable". The plain `decrypt` returns an empty string on failure,
+    // which made a rotated or corrupted key silently downgrade this to an
+    // UNSIGNED send rather than an error.
+    if let Some(secret) = crate::crypto::decrypt_checked(&cfg.secret).map_err(|e| e.to_string())? {
         let timestamp = chrono::Utc::now().timestamp();
         let signature = sign(timestamp, secret.trim())?;
         body["timestamp"] = json!(timestamp.to_string());
         body["sign"] = json!(signature);
     }
 
-    let client = reqwest::Client::new();
+    let client = crate::http::webhook_client();
     let resp = client
         .post(cfg.webhook_url.trim())
         .json(&body)
@@ -175,7 +179,7 @@ pub async fn send_card(cfg: &FeishuConfig, card: Value) -> Result<(), String> {
 /// Send a plain-text message (used by the "test" button).
 pub async fn send_text(cfg: &FeishuConfig, text: &str) -> Result<(), String> {
     let card = build_card(
-        "✅ LingxiBI — 飞书测试",
+        "✅ HISENSE LingxiBI — 飞书测试",
         "green",
         &[CardField {
             label: "状态".to_string(),

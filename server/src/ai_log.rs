@@ -12,7 +12,7 @@ pub async fn log_ai_request(
     input_params: Option<&str>,
     output_result: Option<&str>,
 ) {
-    let ctx = context.map(|c| if c.len() > 2000 { &c[..2000] } else { c });
+    let ctx = context.map(|c| crate::truncate_chars(c, 2000));
     let _ = sqlx::query(
         "INSERT INTO ai_logs (request_type, model, duration_ms, status, error_message, context, input_params, output_result) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )

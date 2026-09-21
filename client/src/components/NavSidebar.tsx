@@ -80,7 +80,7 @@ export default function NavSidebar() {
       >
         {/* Logo */}
         <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-4 flex-shrink-0 overflow-hidden">
-          <img src="/logo.png" alt="LingxiBI" className="w-full h-full object-contain" />
+          <img src="/logo.png" alt="HISENSE LingxiBI" className="w-full h-full object-contain" />
         </div>
 
         {/* Nav Items */}
@@ -96,7 +96,7 @@ export default function NavSidebar() {
 
         {/* Star on GitHub */}
         <a
-          href="https://github.com/bonfirer/LingxiBI"
+          href="https://github.com/bonfirer/HISENSE LingxiBI"
           target="_blank"
           rel="noreferrer"
           title={t('nav.starOnGithub')}

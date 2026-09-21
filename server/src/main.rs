@@ -19,6 +19,7 @@ use tracing_subscriber;
 
 mod crypto;
 mod db_pool;
+mod http;
 mod llm;
 mod models;
 mod routes;
@@ -33,6 +34,51 @@ pub mod ai_log;
 
 use db_pool::PoolCache;
 
+/// Report a fatal startup misconfiguration and exit.
+///
+/// Used instead of `panic!`/`unwrap` for configuration problems: a panic buries
+/// an actionable message under "thread 'main' panicked" plus a backtrace hint,
+/// which is exactly the wrong thing to show someone whose deploy won't boot.
+pub fn fatal(message: &str) -> ! {
+    tracing::error!("Startup failed: {}", message);
+    std::process::exit(1);
+}
+
+/// Truncate `s` to at most `max_chars` characters.
+///
+/// Byte slicing (`&s[..n]`) panics when `n` lands inside a multi-byte character,
+/// and for this app that is ordinary input rather than an edge case: a 70-char
+/// Chinese prompt is already past 200 bytes. Every truncation must cut on a
+/// character boundary — a panic here aborts the request *after* the LLM call has
+/// been paid for.
+pub fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
+    }
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_chars;
+
+    #[test]
+    fn never_splits_a_multibyte_character() {
+        // Regression: `&q[..q.len().min(200)]` panicked here (byte 200 falls
+        // inside a 3-byte character).
+        let q = "预警数据分析".repeat(12); // 72 chars / 216 bytes
+        assert_eq!(truncate_chars(&q, 200), q.as_str());
+        assert_eq!(truncate_chars(&q, 70).chars().count(), 70);
+    }
+
+    #[test]
+    fn shorter_than_limit_is_unchanged() {
+        assert_eq!(truncate_chars("abc", 10), "abc");
+        assert_eq!(truncate_chars("", 3), "");
+        assert_eq!(truncate_chars("abcdef", 3), "abc");
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: MySqlPool,
@@ -45,24 +91,60 @@ async fn main() {
         .with_target(false)
         .init();
 
-    dotenvy::dotenv().ok();
+    // Report where configuration came from. A missing `.env` is not an error
+    // (values may come from the real environment, e.g. a systemd unit), but
+    // silence here is the single most confusing thing when a deploy can't read
+    // its settings, so say plainly what was found.
+    match dotenvy::dotenv() {
+        Ok(path) => tracing::info!("Loaded configuration from {}", path.display()),
+        Err(_) => {
+            let cwd = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "?".to_string());
+            tracing::info!(
+                "No .env file found (searched upward from {}); using environment variables only",
+                cwd
+            );
+        }
+    }
 
     // Security: require a JWT signing secret. Refuse to start without one so we
     // never fall back to a guessable default that would let anyone forge tokens.
     match std::env::var("JWT_SECRET") {
         Ok(s) if s.len() >= 16 => {}
-        Ok(_) => panic!("JWT_SECRET must be at least 16 characters. Set a strong random value."),
-        Err(_) => panic!("JWT_SECRET is not set. Set a strong random value (>= 16 chars) before starting."),
+        Ok(_) => fatal("JWT_SECRET must be at least 16 characters. Set a strong random value, e.g. `openssl rand -hex 32`."),
+        Err(_) => fatal("JWT_SECRET is not set. Set a strong random value (>= 16 chars), e.g. `openssl rand -hex 32`."),
     }
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "mysql://root:password@localhost:3306/ai_report".to_string());
+    // Validate credential-encryption key setup before anything depends on it.
+    crypto::check_key_config();
 
-    let pool = MySqlPoolOptions::new()
+    // Required, with no fallback. This used to default to
+    // `mysql://root:password@localhost:3306/ai_report`, which turned a missing
+    // DATABASE_URL into a misleading "Access denied for user 'root'@'localhost'"
+    // — the real problem is the configuration never being read, not credentials.
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => fatal(
+            "DATABASE_URL is not set. Set it to the metadata database, e.g.\n  \
+             DATABASE_URL=mysql://user:password@127.0.0.1:3306/ai_report\n\
+             (URL-encode special characters in the password: '@' -> %40, '#' -> %23)",
+        ),
+    };
+
+    let pool = match MySqlPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
         .await
-        .expect("Failed to connect to metadata database");
+    {
+        Ok(pool) => pool,
+        Err(e) => fatal(&format!(
+            "Could not connect to the metadata database: {}\n\
+             Check DATABASE_URL (host, port, database name, and that the user may \
+             connect from this machine).",
+            e
+        )),
+    };
 
     // Run schema migrations, tracked in `schema_migrations` so each runs exactly
     // once and genuine failures abort startup (see `run_migrations`).
@@ -87,12 +169,21 @@ async fn main() {
             .allow_methods(Any)
             .allow_headers(Any)
     } else {
+        let configured = allowed_origin
+            .parse::<axum::http::HeaderValue>()
+            .expect("Invalid CORS_ALLOWED_ORIGIN");
         CorsLayer::new()
-            .allow_origin(
-                allowed_origin
-                    .parse::<axum::http::HeaderValue>()
-                    .expect("Invalid CORS_ALLOWED_ORIGIN"),
-            )
+            .allow_origin(tower_http::cors::AllowOrigin::predicate(
+                move |origin, _parts| {
+                    // Report HTML is served under a `sandbox` CSP, which gives it
+                    // an opaque origin, so its fetches to /api/ arrive with
+                    // `Origin: null`. Those requests carry an explicit token in
+                    // the URL and never rely on cookies, so honouring the opaque
+                    // origin doesn't widen access — it just keeps the sandboxed
+                    // dashboard able to load its own data.
+                    origin == configured || origin.as_bytes() == b"null"
+                },
+            ))
             .allow_methods(Any)
             .allow_headers(Any)
     };
@@ -232,8 +323,12 @@ async fn main() {
         .route("/api/users", post(routes::auth::create_user))
         .route("/api/users/{id}", put(routes::auth::update_user))
         .route("/api/users/{id}", delete(routes::auth::delete_user))
-        // All routes above require a valid JWT.
-        .route_layer(axum::middleware::from_fn(routes::auth::require_auth));
+        // All routes above require a valid JWT that is still current (the
+        // middleware checks `users.token_version`, so revoked sessions fail).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            routes::auth::require_auth,
+        ));
 
     // Routes loaded directly by the browser inside iframes / embedded fetches.
     // Auth accepted via Authorization header OR a ?token= query param.
@@ -241,7 +336,10 @@ async fn main() {
         .route("/api/reports/{id}/html", get(routes::reports::get_html))
         .route("/api/reports/{id}/data", get(routes::reports::get_live_data))
         .route("/api/reports/{id}/versions/{vid}/html", get(routes::reports::get_version_html))
-        .route_layer(axum::middleware::from_fn(routes::auth::require_auth_flexible));
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            routes::auth::require_auth_flexible,
+        ));
 
     // Public routes — no auth required.
     // - health check
@@ -280,15 +378,29 @@ async fn main() {
     // Start background email alert scheduler
     alert_scheduler::spawn(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
-        .await
-        .unwrap();
-    tracing::info!("Server listening on http://0.0.0.0:3001");
+    // Listen address is configurable so a deploy can bind to loopback only and
+    // let the reverse proxy be the sole public entry point.
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+    let bind_host = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let addr = format!("{}:{}", bind_host, port);
 
-    axum::serve(listener, app)
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => fatal(&format!(
+            "Port {} is already in use — another instance is probably still running.\n\
+             Stop it, or set PORT to a different value.",
+            port
+        )),
+        Err(e) => fatal(&format!("Could not bind to {}: {}", addr, e)),
+    };
+    tracing::info!("Server listening on http://{}", addr);
+
+    if let Err(e) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .unwrap();
+    {
+        fatal(&format!("Server error: {}", e));
+    }
 }
 
 /// Attach a baseline set of security response headers to every response.
@@ -402,6 +514,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("031_metric_params", include_str!("../migrations/031_metric_params.sql")),
     ("032_data_pool_params", include_str!("../migrations/032_data_pool_params.sql")),
     ("033_wishes", include_str!("../migrations/033_wishes.sql")),
+    ("034_token_version", include_str!("../migrations/034_token_version.sql")),
 ];
 
 /// Whether a migration error means "this object was already applied" (safe to
@@ -439,7 +552,7 @@ fn is_already_applied_error(e: &sqlx::Error) -> bool {
 ///   swallowed — a broken schema should never be served.
 async fn run_migrations(pool: &MySqlPool, migrations: &[(&str, &str)]) {
     // Serialize concurrent instances so two servers can't race the same DDL.
-    let lock: (Option<i32>,) = sqlx::query_as("SELECT GET_LOCK('lingxibi_migrations', 60)")
+    let lock: (Option<i32>,) = sqlx::query_as("SELECT GET_LOCK('HISENSE LingxiBI_migrations', 60)")
         .fetch_one(pool)
         .await
         .expect("Failed to acquire migration lock");
@@ -479,14 +592,14 @@ async fn run_migrations(pool: &MySqlPool, migrations: &[(&str, &str)]) {
                     continue;
                 }
                 // Genuine failure: release the lock and abort so ops notice.
-                let _ = sqlx::query("SELECT RELEASE_LOCK('lingxibi_migrations')")
+                let _ = sqlx::query("SELECT RELEASE_LOCK('HISENSE LingxiBI_migrations')")
                     .execute(pool)
                     .await;
                 panic!(
                     "Migration '{}' failed: {}\n  statement: {}",
                     version,
                     e,
-                    &trimmed[..trimmed.len().min(120)]
+                    truncate_chars(trimmed, 120)
                 );
             }
         }
@@ -499,7 +612,7 @@ async fn run_migrations(pool: &MySqlPool, migrations: &[(&str, &str)]) {
         tracing::info!("Applied migration {}", version);
     }
 
-    let _ = sqlx::query("SELECT RELEASE_LOCK('lingxibi_migrations')")
+    let _ = sqlx::query("SELECT RELEASE_LOCK('HISENSE LingxiBI_migrations')")
         .execute(pool)
         .await;
     tracing::info!("Migrations complete ({} tracked)", migrations.len());

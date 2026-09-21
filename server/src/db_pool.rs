@@ -1,11 +1,39 @@
-use sqlx::mysql::MySqlConnectOptions;
-use sqlx::postgres::PgConnectOptions;
-use sqlx::{MySqlPool, PgPool};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{Executor, MySqlPool, PgPool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::models::DataSource;
+use crate::routes::query::QUERY_TIMEOUT_SECS;
+
+/// Maximum connections per data source pool.
+const MAX_CONNECTIONS: u32 = 10;
+
+/// Per-connection session settings applied to every **data source** pool.
+///
+/// This is the database-level half of the read-only guarantee. `validate_sql`
+/// inspects statement text, which is a best-effort layer: a hand-written lexer
+/// can always disagree with the server's own parser, and it says nothing about
+/// what a function like `pg_read_file()` or `dblink_exec()` does. Asking the
+/// server to refuse writes outright does not depend on out-parsing it.
+///
+/// Applied at connect time rather than per query, so it covers every path that
+/// uses these pools (ad-hoc queries, metric refreshes, introspection, column
+/// profiling, the snapshot and alert schedulers) with no risk of leaking an open
+/// transaction back into the pool.
+///
+/// Best-effort by design: a server too old to understand a statement logs a
+/// warning instead of breaking the data source. The real guarantee is still a
+/// read-only database account, which is what `.env.example` tells operators to
+/// use — this makes a misconfigured account much less dangerous.
+///
+/// NOTE: only data source pools get this. The application's own metadata pool
+/// (built in `main.rs`) must stay writable.
+fn statement_timeout_ms() -> u64 {
+    QUERY_TIMEOUT_SECS * 1000
+}
 
 /// Cached connection pools for user data sources, keyed by datasource ID.
 /// This avoids creating a fresh pool on every query — pools are reused
@@ -46,7 +74,41 @@ impl PoolCache {
             .password(&crate::crypto::decrypt(&ds.password))
             .database(&ds.database_name);
 
-        let pool = MySqlPool::connect_with(opts)
+        let pool = MySqlPoolOptions::new()
+            .max_connections(MAX_CONNECTIONS)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Read-only for every transaction on this connection. With
+                    // autocommit on, each statement is its own transaction, so a
+                    // write is rejected by the server (ER_CANT_EXECUTE_IN_READ_ONLY
+                    // _TRANSACTION). MySQL 5.6+ / MariaDB 10.0+.
+                    if let Err(e) = conn.execute("SET SESSION TRANSACTION READ ONLY").await {
+                        tracing::warn!(
+                            "Data source connection could not be set READ ONLY ({}). \
+                             Queries fall back to text-level validation only — use a \
+                             SELECT-only database account for this data source.",
+                            e
+                        );
+                    }
+                    // Server-side cap so a slow query actually stops server-side.
+                    // The app's own timeout only abandons the future; it cannot
+                    // cancel work already running on the server.
+                    // `max_execution_time` is MySQL 5.7.8+; MariaDB spells it
+                    // `max_statement_time` (seconds). Try both, ignore mismatches.
+                    let ms = super::db_pool::statement_timeout_ms();
+                    let _ = conn
+                        .execute(&*format!("SET SESSION max_execution_time = {}", ms))
+                        .await;
+                    let _ = conn
+                        .execute(&*format!(
+                            "SET SESSION max_statement_time = {}",
+                            ms as f64 / 1000.0
+                        ))
+                        .await;
+                    Ok(())
+                })
+            })
+            .connect_with(opts)
             .await
             .map_err(|e| format!("MySQL connection failed: {}", e))?;
 
@@ -73,7 +135,36 @@ impl PoolCache {
             .password(&crate::crypto::decrypt(&ds.password))
             .database(&ds.database_name);
 
-        let pool = PgPool::connect_with(opts)
+        let pool = PgPoolOptions::new()
+            .max_connections(MAX_CONNECTIONS)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Every transaction on this connection starts read-only, so a
+                    // write raises "cannot execute ... in a read-only transaction".
+                    // This also blocks the write-capable *functions* the text
+                    // validator doesn't know about (lo_import, dblink_exec, ...).
+                    // Note `SET` itself is rejected by validate_sql, so a query
+                    // cannot turn this back off.
+                    if let Err(e) = conn.execute("SET default_transaction_read_only = on").await {
+                        tracing::warn!(
+                            "Data source connection could not be set READ ONLY ({}). \
+                             Queries fall back to text-level validation only — use a \
+                             SELECT-only database account for this data source.",
+                            e
+                        );
+                    }
+                    let ms = super::db_pool::statement_timeout_ms();
+                    let _ = conn
+                        .execute(&*format!("SET statement_timeout = {}", ms))
+                        .await;
+                    // Don't let an abandoned query hold a snapshot open forever.
+                    let _ = conn
+                        .execute("SET idle_in_transaction_session_timeout = 60000")
+                        .await;
+                    Ok(())
+                })
+            })
+            .connect_with(opts)
             .await
             .map_err(|e| format!("PostgreSQL connection failed: {}", e))?;
 

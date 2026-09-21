@@ -212,7 +212,7 @@
     "publishedToast": "Published — the public link is now live",
     "unpublishedToast": "Unpublished — the public link is now offline",
     "versions": "History",
-    "currentVersion": "Current version",
+    "currentVersion": "Current",
     "askHistory": "Ask history",
     "noAskHistory": "No prompts yet",
     "reusePrompt": "Click to reuse this prompt",
@@ -265,7 +265,6 @@
     },
     "versionDeleted": "Version deleted",
     "oldVersion": "Old version",
-    "currentVersion": "Current",
     "unsaved": "Unpublished changes",
     "share": "Share",
     "device": {
@@ -273,6 +272,8 @@
       "mobile": "Mobile"
     },
     "shareCopied": "Share link copied to clipboard!",
+    "shareFailed": "Could not create the share link. Please try again.",
+    "shareCopyManual": "Copy the link manually:",
     "refresh": {
       "off": "Off",
       "min": "min",

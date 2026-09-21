@@ -37,7 +37,51 @@ const PREFIX: &str = "enc:v1:";
 
 static KEY: OnceLock<[u8; 32]> = OnceLock::new();
 
+/// Minimum accepted length for a dedicated `ENCRYPTION_KEY`.
+const MIN_ENCRYPTION_KEY_LEN: usize = 32;
+
+/// Validate credential-encryption key configuration at startup.
+///
+/// Called from `main` so misconfiguration surfaces immediately rather than as
+/// silently unreadable credentials later. Deliberately does not hard-fail when
+/// `ENCRYPTION_KEY` is absent, since existing deployments derive from
+/// `JWT_SECRET` and changing the key would orphan their stored secrets.
+pub fn check_key_config() {
+    match std::env::var("ENCRYPTION_KEY") {
+        Ok(k) if !k.trim().is_empty() => {
+            let k = k.trim();
+            if k.len() < MIN_ENCRYPTION_KEY_LEN {
+                crate::fatal(&format!(
+                    "ENCRYPTION_KEY must be at least {} characters (got {}). \
+                     It is stretched with a single SHA-256, not a password KDF, \
+                     so it needs real entropy.",
+                    MIN_ENCRYPTION_KEY_LEN,
+                    k.len()
+                ));
+            }
+            if std::env::var("JWT_SECRET").map(|j| j.trim() == k).unwrap_or(false) {
+                crate::fatal(
+                    "ENCRYPTION_KEY must differ from JWT_SECRET. Sharing one value means \
+                     a single leak both forges admin tokens and decrypts every stored \
+                     credential, and rotating it to revoke tokens destroys those credentials.",
+                );
+            }
+        }
+        _ => {
+            tracing::warn!(
+                "ENCRYPTION_KEY is not set — credential encryption is deriving its key from \
+                 JWT_SECRET. One leaked value then both forges admin tokens and decrypts all \
+                 stored datasource/LLM/SMTP credentials, and rotating JWT_SECRET makes them \
+                 unreadable. Set a separate ENCRYPTION_KEY (>= {} chars) in production.",
+                MIN_ENCRYPTION_KEY_LEN
+            );
+        }
+    }
+}
+
 /// Derive (once) the 32-byte AES key from `ENCRYPTION_KEY` or `JWT_SECRET`.
+///
+/// See [`check_key_config`] for the validation applied at startup.
 fn key() -> &'static [u8; 32] {
     KEY.get_or_init(|| {
         let material = std::env::var("ENCRYPTION_KEY")
@@ -47,6 +91,11 @@ fn key() -> &'static [u8; 32] {
             .unwrap_or_default();
         // Domain-separated so the derived key can never collide with any other
         // use of the same secret material (e.g. JWT signing).
+        //
+        // ⚠️ This label is part of the key derivation, not a display string.
+        // Changing it (e.g. for a rebrand) silently rotates the encryption key
+        // and makes every already-stored credential undecryptable. Leave it
+        // alone; if it ever must change, bump PREFIX to `enc:v2:` and migrate.
         let mut hasher = Sha256::new();
         hasher.update(b"lingxibi::credential-encryption::v1::");
         hasher.update(material.as_bytes());
@@ -120,6 +169,26 @@ pub fn decrypt(stored: &str) -> String {
             String::new()
         }
     }
+}
+
+/// Decrypt a stored secret, distinguishing "not configured" from "configured but
+/// undecryptable" (rotated key, corrupted ciphertext).
+///
+/// [`decrypt`] returns an empty string on failure, and callers have historically
+/// read that as "no secret set" — which for the Feishu channel silently turned a
+/// signed webhook into an unsigned one. Use this wherever failing open is unsafe.
+pub fn decrypt_checked(stored: &str) -> Result<Option<String>, &'static str> {
+    if stored.trim().is_empty() {
+        return Ok(None);
+    }
+    let out = decrypt(stored);
+    if out.trim().is_empty() {
+        return Err(
+            "stored credential could not be decrypted — the encryption key changed \
+             or the value is corrupted; re-enter it in settings",
+        );
+    }
+    Ok(Some(out))
 }
 
 /// Eagerly encrypt any legacy plaintext credentials still sitting in the

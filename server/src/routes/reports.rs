@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::IntoResponse,
     Extension, Json,
 };
 use std::sync::Arc;
@@ -166,7 +167,7 @@ pub async fn render(
         let state_clone = Arc::clone(&state);
         let report_clone = report.clone();
         tokio::spawn(async move {
-            match generate_html_dashboard(&state_clone, &report_clone, &prompt, theme.as_ref()).await {
+            match generate_html_dashboard(&state_clone, &report_clone, &prompt, theme.as_ref(), &user).await {
                 Ok(html) => {
                     let _ = sqlx::query(
                         "UPDATE reports SET html_content = ?, generation_status = 'done', generation_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
@@ -264,6 +265,7 @@ async fn generate_html_dashboard(
     report: &Report,
     prompt: &str,
     theme: Option<&ReportTheme>,
+    user: &AuthUser,
 ) -> Result<String, (StatusCode, String)> {
     // Load LLM config
     let llm_cfg = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
@@ -310,14 +312,24 @@ async fn generate_html_dashboard(
         }
     }
 
-    // If no datasources, try loading from data_pools or metrics (same as before)
+    // If no datasources, try loading from data_pools or metrics (same as before).
+    // Scoped to the caller's own metrics (admins see all) — an unscoped sweep
+    // would pull other users' SQL and cached result rows into this report.
     if data_context.is_empty() {
-        // Try metrics
-        let metrics_data: Vec<MetricPool> = sqlx::query_as::<_, MetricPool>(
-            "SELECT * FROM metric_pools ORDER BY group_id, id LIMIT 10"
-        )
-        .fetch_all(&state.db)
-        .await
+        let metrics_data: Vec<MetricPool> = if user.is_admin {
+            sqlx::query_as::<_, MetricPool>(
+                "SELECT * FROM metric_pools ORDER BY group_id, id LIMIT 10",
+            )
+            .fetch_all(&state.db)
+            .await
+        } else {
+            sqlx::query_as::<_, MetricPool>(
+                "SELECT * FROM metric_pools WHERE owner_user_id = ? ORDER BY group_id, id LIMIT 10",
+            )
+            .bind(user.id)
+            .fetch_all(&state.db)
+            .await
+        }
         .map_err(crate::routes::internal_error)?;
 
         for m in &metrics_data {
@@ -334,7 +346,7 @@ async fn generate_html_dashboard(
 
     if data_context.is_empty() {
         // Last resort: generate from schema
-        let schema_context = crate::routes::chat::build_kg_context(state, None, "").await;
+        let schema_context = crate::routes::chat::build_kg_context(state, None, "", user).await;
         if schema_context.contains("No schema") {
             return Err((StatusCode::BAD_REQUEST, "No data available. Add data sources or metrics first.".to_string()));
         }
@@ -581,11 +593,19 @@ pub async fn share(
     }))
 }
 
-/// View a shared report (public access).
+/// View a shared report's metadata (public access).
+///
+/// Two things this must not do, both of which it previously did:
+/// - Serve unpublished reports. The `/html` and `/data` share endpoints gate on
+///   `status = 'published'`, but this one didn't, so "unpublish" left the content
+///   fully readable here.
+/// - Return the whole `reports` row. That serialized `html_content`,
+///   `published_html`, `data_cache`, `config` and the share token itself to an
+///   anonymous caller. Only what the shared viewer actually needs is returned.
 pub async fn view_shared(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-) -> Result<Json<Report>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let report = sqlx::query_as::<_, Report>(
         "SELECT * FROM reports WHERE share_token = ? AND share_public = 1",
     )
@@ -595,7 +615,20 @@ pub async fn view_shared(
     .map_err(crate::routes::internal_error)?
     .ok_or((StatusCode::NOT_FOUND, "Report not found or not public".to_string()))?;
 
-    Ok(Json(report))
+    if report.status.as_deref() != Some("published") {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "Report not found or not public".to_string(),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "id": report.id,
+        "title": report.title,
+        "status": report.status,
+        "refresh_interval": report.refresh_interval,
+        "updated_at": report.updated_at,
+    })))
 }
 
 /// Serve the raw HTML content of a report (for iframe embedding).
@@ -621,6 +654,40 @@ fn localize_report_html(html: &str) -> String {
         .replace("fonts.gstatic.com", "fonts.gstatic.cn")
 }
 
+/// Serve report HTML under a browser-enforced sandbox.
+///
+/// Report HTML is written by the LLM and is also directly editable through
+/// `PUT /api/reports/{id}/html`, so it is untrusted content that we nevertheless
+/// have to execute (the charts are scripts). The `sandbox` CSP directive puts
+/// the document in an *opaque origin*: scripts still run, but they can no longer
+/// read the application origin's `localStorage` — where the session JWT lives —
+/// and cannot act as the app origin against our own API.
+///
+/// The capability that matters is the one we do NOT grant: `allow-same-origin`.
+/// Without it the document gets an opaque origin and cannot touch app-origin
+/// storage or credentials. `allow-popups`/`allow-forms`/`allow-modals` are
+/// granted because dashboards legitimately use drill-down links, forms and
+/// confirmation dialogs, and withholding them silently makes those controls do
+/// nothing when clicked. None of them grant access to the parent origin, and a
+/// page that wanted to send data outward could already do so with `fetch`.
+///
+/// Applies even when the URL is opened as a top-level navigation, so it does not
+/// depend on the embedding page remembering to set an `<iframe sandbox>`.
+fn sandboxed_html(html: String) -> axum::response::Response {
+    use axum::http::header;
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox allow-scripts allow-popups allow-forms allow-modals",
+            ),
+        ],
+        html,
+    )
+        .into_response()
+}
+
 /// Neutral page shown at a public share link when the report is not currently
 /// published (never published, or taken offline via "unpublish").
 fn shared_offline_page() -> String {
@@ -641,7 +708,7 @@ pub async fn get_html(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i32>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<axum::response::Html<String>, (StatusCode, String)> {
+) -> Result<axum::response::Response, (StatusCode, String)> {
     let preview = params.get("preview").map(|v| v == "1" || v == "true").unwrap_or(false);
 
     let report = load_owned_report(&state, id, &user).await?;
@@ -663,7 +730,7 @@ pub async fn get_html(
         } else {
             html.insert_str(0, guard);
         }
-        return Ok(axum::response::Html(html));
+        return Ok(sandboxed_html(html));
     }
 
     // Inject the persisted refresh interval (replace default 60000ms if present)
@@ -704,14 +771,25 @@ pub async fn get_html(
         }
     }
 
-    // The page's live-data fetch (/api/reports/{id}/data) runs inside the iframe and
-    // cannot set an Authorization header. Forward the token (passed to this endpoint
-    // via ?token=) by wrapping fetch to append it to same-origin /api/ requests.
-    if let Some(token) = params.get("token") {
-        if !token.is_empty() {
-            let token_js = token.replace('\\', "").replace('"', "");
+    // The page's live-data fetch (/api/reports/{id}/data) runs inside the iframe
+    // and cannot set an Authorization header, so the token has to travel inside
+    // the page. Two rules keep that safe:
+    //
+    // 1. We never echo back the caller-supplied `?token=` value. Reflecting it
+    //    into a <script> made this a reflected-XSS sink (and leaked whatever
+    //    token the caller used — possibly a 7-day session JWT). Instead we mint
+    //    a FRESH short-lived, read-only embed token for the authenticated
+    //    caller, so nothing user-controlled ever reaches the page and the
+    //    injected credential is scope-limited even if the page leaks it.
+    // 2. The fetch wrapper only attaches the token to same-origin `/api/`
+    //    requests. Matching `'/api/'` anywhere in the URL meant report HTML
+    //    could exfiltrate the token by fetching `https://evil.example/api/x`.
+    if params.contains_key("token") {
+        if let Ok(embed) = crate::routes::auth::create_embed_token_for(&state, user.id).await {
+            // serde_json emits a correctly escaped JS string literal.
+            let token_js = serde_json::to_string(&embed).unwrap_or_else(|_| "\"\"".to_string());
             let wrapper = format!(
-                r#"<script>(function(){{var _t="{}";var _f=window.fetch;window.fetch=function(u,o){{try{{if(typeof u==='string'&&u.indexOf('/api/')!==-1&&u.indexOf('token=')===-1){{u+=(u.indexOf('?')!==-1?'&':'?')+'token='+encodeURIComponent(_t);}}}}catch(e){{}}return _f.call(this,u,o);}};}})();</script>"#,
+                r#"<script>(function(){{var _t={};var _o=new URL(location.href).origin;var _f=window.fetch;function _same(u){{try{{var a=new URL(u,location.href);return a.origin===_o&&a.pathname.indexOf('/api/')===0;}}catch(e){{return false;}}}}window.fetch=function(u,o){{try{{if(typeof u==='string'&&u.indexOf('token=')===-1&&_same(u)){{u+=(u.indexOf('?')!==-1?'&':'?')+'token='+encodeURIComponent(_t);}}}}catch(e){{}}return _f.call(this,u,o);}};}})();</script>"#,
                 token_js
             );
             if let Some(pos) = html.find("<head>") {
@@ -724,14 +802,14 @@ pub async fn get_html(
         }
     }
 
-    Ok(axum::response::Html(html))
+    Ok(sandboxed_html(html))
 }
 
 /// Serve shared report HTML directly.
 pub async fn view_shared_html(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-) -> Result<axum::response::Html<String>, (StatusCode, String)> {
+) -> Result<axum::response::Response, (StatusCode, String)> {
     let report = sqlx::query_as::<_, Report>(
         "SELECT * FROM reports WHERE share_token = ? AND share_public = 1",
     )
@@ -752,7 +830,7 @@ pub async fn view_shared_html(
     };
     let mut html = match source {
         Some(h) => localize_report_html(&h),
-        None => return Ok(axum::response::Html(shared_offline_page())),
+        None => return Ok(sandboxed_html(shared_offline_page())),
     };
 
     // Shared viewers have no auth token, so the HTML's refreshData() cannot call
@@ -760,9 +838,13 @@ pub async fn view_shared_html(
     // the public, share-token-guarded data endpoint so a shared page shows LIVE
     // data instead of the published (static) snapshot. Injected early in <head>
     // so window.fetch is patched before refreshData() ever runs.
+    // `token` here is a server-generated UUID hex string, but emit it as a
+    // properly escaped JS literal rather than raw interpolation so this stays
+    // safe if the token format ever changes.
+    let token_js = serde_json::to_string(&token).unwrap_or_else(|_| "\"\"".to_string());
     let data_proxy = format!(
-        r#"<script>(function(){{var _f=window.fetch;window.fetch=function(u,o){{try{{if(typeof u==='string'){{u=u.replace(/\/api\/reports\/\d+\/data/,'/api/share/{}/data');}}}}catch(e){{}}return _f.call(this,u,o);}};}})();</script>"#,
-        token
+        r#"<script>(function(){{var _t={};var _f=window.fetch;window.fetch=function(u,o){{try{{if(typeof u==='string'){{u=u.replace(/\/api\/reports\/\d+\/data/,'/api/share/'+_t+'/data');}}}}catch(e){{}}return _f.call(this,u,o);}};}})();</script>"#,
+        token_js
     );
     if let Some(pos) = html.find("<head>") {
         html.insert_str(pos + "<head>".len(), &data_proxy);
@@ -783,7 +865,7 @@ pub async fn view_shared_html(
         html.insert_str(pos, &inject);
     }
 
-    Ok(axum::response::Html(html))
+    Ok(sandboxed_html(html))
 }
 
 /// HTML-attribute escaping for injected filter control values.
@@ -1579,7 +1661,7 @@ pub async fn get_version_html(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path((report_id, version_id)): Path<(i32, i32)>,
-) -> Result<axum::response::Html<String>, (StatusCode, String)> {
+) -> Result<axum::response::Response, (StatusCode, String)> {
     load_owned_report(&state, report_id, &user).await?;
     let html: Option<(String,)> = sqlx::query_as(
         "SELECT html_content FROM report_versions WHERE report_id = ? AND id = ?"
@@ -1591,7 +1673,7 @@ pub async fn get_version_html(
     .map_err(crate::routes::internal_error)?;
 
     match html {
-        Some((content,)) => Ok(axum::response::Html(localize_report_html(&content))),
+        Some((content,)) => Ok(sandboxed_html(localize_report_html(&content))),
         None => Err((StatusCode::NOT_FOUND, "Version not found".to_string())),
     }
 }

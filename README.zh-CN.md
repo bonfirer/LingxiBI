@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="client/public/rlogo.png" alt="LingxiBI logo" width="120" />
+<img src="client/public/rlogo.png" alt="HISENSE LingxiBI logo" width="120" />
 
-# 灵犀BI · LingxiBI
+# 灵犀BI · HISENSE LingxiBI
 
 **接入数据库，与数据对话，让 AI 为你构建看板。**
 
@@ -14,13 +14,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-使用-docker-快速开始推荐)
+[![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![i18n](https://img.shields.io/badge/i18n-EN%20%7C%20中文-9cf)](#-功能特性)
 
 <br/>
 
-[🚀 在线体验](#-在线体验) · [⚡ 快速开始](#-使用-docker-快速开始推荐) · [✨ 功能特性](#-功能特性) · [🧠 自学习机制](#-自学习机制) · [🏗️ 架构](#️-架构) · [📦 部署](#-生产环境部署)
+[🚀 在线体验](#-在线体验) · [⚡ 快速开始](#-快速开始本地开发) · [✨ 功能特性](#-功能特性) · [🧠 自学习机制](#-自学习机制) · [🏗️ 架构](#️-架构) · [📦 部署](#-生产环境部署)
 
 <br/>
 
@@ -36,7 +36,7 @@
 
 ## 💡 项目简介
 
-**灵犀BI（LingxiBI）** 是一个会自我学习的 BI 平台，能把原始数据库变成可分享、可交互的数据看板 —— 无需手写 SQL，无需搭建传统 BI 工具。
+**灵犀BI（HISENSE LingxiBI）** 是一个会自我学习的 BI 平台，能把原始数据库变成可分享、可交互的数据看板 —— 无需手写 SQL，无需搭建传统 BI 工具。
 
 接入 MySQL、PostgreSQL 或 Oracle，然后：
 
@@ -165,31 +165,7 @@ flowchart TD
 
 ---
 
-## ⚡ 使用 Docker 快速开始（推荐）
-
-```bash
-docker compose up -d --build
-```
-
-打开 **http://localhost:9528** → 创建首个管理员账户，即可使用。
-
-| 服务 | 角色 |
-|---------|------|
-| `db` | MySQL 元数据存储（仅内部访问） |
-| `server` | Rust API `:3001`（首次启动自动生成 JWT_SECRET） |
-| `web` | Nginx `:9528` —— SPA + API 代理（含 WebSocket） |
-
-```bash
-docker compose logs -f server     # 跟踪 API 日志
-docker compose down               # 停止（保留数据）
-docker compose down -v            # 停止并清除所有数据
-```
-
-> 🛡️ **生产环境：** 在 `.env` 中设置强密码，`CORS_ALLOWED_ORIGIN` 改为真实域名，并在上游做 TLS 终止。
-
----
-
-## 💻 本地开发
+## ⚡ 快速开始（本地开发）
 
 <details>
 <summary><b>前置依赖</b></summary>
@@ -242,14 +218,19 @@ bash scripts/setup-server.sh [domain]
 
 Rust 二进制在目标主机编译（避免 glibc 不匹配）。SPA 在本地构建后作为静态文件部署。
 
-> 💡 Docker Compose 方案同样可用于生产环境，部署在 TLS 代理之后。
+`setup-server.sh` 会安装工具链、MySQL、Nginx 与 TLS，并生成一份 Nginx 配置：
+静态托管 SPA，同时把 `/api/`（含 WebSocket）反向代理到 `127.0.0.1:3001` 上的
+API 服务。配置样式见 `deploy/nginx.standalone.conf`。
+
+> 🛡️ **生产环境：** `CORS_ALLOWED_ORIGIN` 改为真实来源，每个数据源都使用只读数据库账号，
+> 并通过 HTTPS 提供 SPA —— 分享功能依赖的浏览器剪贴板 API 在纯 HTTP 下不可用。
 
 ---
 
 ## 🗂️ 项目结构
 
 ```
-lingxibi/
+HISENSE LingxiBI/
 ├── client/                  React + Vite SPA
 │   └── src/
 │       ├── pages/           路由级页面
@@ -267,8 +248,7 @@ lingxibi/
 │   │   └── ...
 │   └── migrations/          SQL 迁移（自动执行）
 ├── scripts/                 部署自动化
-├── docker-compose.yml       一条命令拉起全栈
-└── .env.example             环境变量模板
+└── deploy/                  独立部署用的 Nginx 配置
 ```
 
 ---
@@ -321,7 +301,6 @@ lingxibi/
 - [ ] 飞书多维表格（Bitable）同步
 - [ ] 更多通知渠道（钉钉、企业微信、Slack）
 - [ ] 凭据静态加密
-- [ ] 多架构 Docker 镜像（GHCR）
 - [ ] `SECURITY.md` + `CHANGELOG.md`
 - [ ] 更多图表类型与看板模板
 

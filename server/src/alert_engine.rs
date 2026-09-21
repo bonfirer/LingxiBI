@@ -224,7 +224,7 @@ fn build_alert_card(metric_name: &str, ctx: &TemplateContext) -> serde_json::Val
         &format!("⚠️ 指标预警：{}", metric_name),
         "red",
         &fields,
-        Some("本卡片由 LingxiBI 自动推送"),
+        Some("本卡片由 HISENSE LingxiBI 自动推送"),
     )
 }
 
@@ -422,7 +422,7 @@ pub fn default_body_template() -> String {
   </div>
   <h3 style="color:#e5e7eb;font-size:14px;margin:0 0 8px;">数据明细（共 {{row_count}} 行）</h3>
   {{table}}
-  <p style="color:#6b7280;font-size:11px;margin-top:20px;">本邮件由 LingxiBI 自动发送，完整数据见附件 Excel。</p>
+  <p style="color:#6b7280;font-size:11px;margin-top:20px;">本邮件由 HISENSE LingxiBI 自动发送，完整数据见附件 Excel。</p>
 </div>"#
         .to_string()
 }

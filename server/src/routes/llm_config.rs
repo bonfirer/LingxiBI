@@ -10,9 +10,13 @@ use crate::routes::auth::AuthUser;
 use crate::routes::ensure_admin;
 use crate::AppState;
 
+/// Admin-only: exposes the provider, `base_url`, model and a 4-character hint of
+/// the API key. Members have no need for it and every sibling here is gated.
 pub async fn get_config(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let config = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
@@ -67,12 +71,16 @@ fn mask_config(config: LLMConfig) -> serde_json::Value {
     // Decrypt so the "last 4 chars" hint reflects the real key, not ciphertext.
     let key = crate::crypto::decrypt(&config.api_key);
     let key = &key;
+    let char_count = key.chars().count();
     let masked = if key.is_empty() {
         String::new()
-    } else if key.len() <= 4 {
+    } else if char_count <= 4 {
         "••••".to_string()
     } else {
-        format!("••••••••{}", &key[key.len() - 4..])
+        // Count characters, not bytes: `&key[key.len() - 4..]` panics on a
+        // multi-byte tail.
+        let tail: String = key.chars().skip(char_count - 4).collect();
+        format!("••••••••{}", tail)
     };
     serde_json::json!({
         "id": config.id,
@@ -86,16 +94,20 @@ fn mask_config(config: LLMConfig) -> serde_json::Value {
     })
 }
 
+/// Admin-only: makes the server call the configured provider with the real API
+/// key, so it is both a spend vector and a probe of an admin-supplied URL.
 pub async fn test_connection(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_admin(&user)?;
     let config = sqlx::query_as::<_, LLMConfig>("SELECT * FROM llm_config WHERE id = 1")
         .fetch_optional(&state.db)
         .await
         .map_err(crate::routes::internal_error)?
         .ok_or((StatusCode::NOT_FOUND, "LLM config not initialized".to_string()))?;
 
-    let client = reqwest::Client::new();
+    let client = crate::http::client();
     let response = client
         .get(format!("{}/models", config.base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {}", crate::crypto::decrypt(&config.api_key)))

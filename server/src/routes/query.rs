@@ -16,7 +16,12 @@ use crate::AppState;
 const MAX_ROWS: usize = 50_000;
 
 /// Maximum execution time per query.
-const QUERY_TIMEOUT_SECS: u64 = 30;
+///
+/// Enforced twice: as an app-side `tokio::time::timeout` (which abandons the
+/// future) and, for MySQL/Postgres, as a server-side statement timeout set in
+/// `db_pool` — the app-side timeout alone cannot cancel work already running on
+/// the database.
+pub const QUERY_TIMEOUT_SECS: u64 = 30;
 
 /// SQL tokenizer that respects string literals, comments, and quoted identifiers.
 /// Returns a list of upper-cased keyword tokens for safety analysis.
@@ -604,41 +609,6 @@ pub fn combined_filters(
     all
 }
 
-/// Validate + execute SQL, optionally applying runtime filters. When `filters`
-/// is empty this is exactly `execute_validated` (base SQL, no bound params).
-/// Otherwise the base SQL is wrapped as a subquery and filter values are passed
-/// as bound parameters.
-pub async fn execute_validated_with_filters(
-    state: &AppState,
-    ds: &DataSource,
-    sql: &str,
-    filters: &[FilterCondition],
-) -> Result<QueryResult, String> {
-    validate_sql(sql)?;
-
-    let Some((wrapped, binds)) = build_filtered_sql(sql, filters, &ds.db_type)? else {
-        // No filters — run the base query exactly as before.
-        return execute_validated(state, ds, sql).await;
-    };
-
-    // The wrapper is derived from an already-validated read-only base; re-check
-    // the assembled statement to keep the read-only guarantee.
-    validate_sql(&wrapped)?;
-
-    let fut = async {
-        match ds.db_type.as_str() {
-            "mysql" => execute_mysql_params(state, ds, &wrapped, &binds).await,
-            "postgresql" => execute_postgres_params(state, ds, &wrapped, &binds).await,
-            "oracle" => execute_oracle_params(state, ds, &wrapped, &binds).await,
-            other => Err(format!("Unsupported database type: {}", other)),
-        }
-    };
-
-    timeout(Duration::from_secs(QUERY_TIMEOUT_SECS), fut)
-        .await
-        .map_err(|_| format!("Query timed out after {} seconds", QUERY_TIMEOUT_SECS))?
-}
-
 /// Full metric execution pipeline: resolve `{{param}}` / `[[ ]]` placeholders in
 /// the metric SQL from `param_values`, then optionally wrap the result with a
 /// filter WHERE — all bound as parameters with one continuous placeholder
@@ -980,42 +950,65 @@ pub async fn execute_oracle_params(
         let conn = pool.get()
             .map_err(|e| format!("Oracle pool get failed: {}", e))?;
 
-        // Bind values are positional (`:1`, `:2`, ...) — build owned Oracle
-        // values, then a parallel Vec of trait-object refs to pass to `query`.
-        let ora_params: Vec<Box<dyn oracle::sql_type::ToSql>> = binds_owned
-            .iter()
-            .map(oracle_bind_value)
-            .collect();
-        let param_refs: Vec<&dyn oracle::sql_type::ToSql> =
-            ora_params.iter().map(|b| b.as_ref()).collect();
+        // Oracle has no session-level read-only setting (unlike MySQL and
+        // Postgres, which are configured once per connection in `db_pool`), so it
+        // has to be scoped to a transaction. `SET TRANSACTION READ ONLY` must be
+        // the FIRST statement of a transaction, and this is a pooled connection,
+        // so clear any inherited transaction state first or it fails with
+        // ORA-01453.
+        let _ = conn.rollback();
+        if let Err(e) = conn.execute("SET TRANSACTION READ ONLY", &[]) {
+            tracing::warn!(
+                "Oracle connection could not be set READ ONLY ({}). Query falls back to \
+                 text-level validation only — use a SELECT-only account for this data source.",
+                e
+            );
+        }
 
-        let rows_result = conn.query(&sql_owned, &param_refs)
-            .map_err(|e| format!("Oracle query error: {}", e))?;
+        // Run the query, then always end the transaction before the connection
+        // goes back to the pool: a lingering read-only transaction would both
+        // trip ORA-01453 on reuse and hold a read snapshot open.
+        let outcome = (|| -> Result<QueryResult, String> {
+            // Bind values are positional (`:1`, `:2`, ...) — build owned Oracle
+            // values, then a parallel Vec of trait-object refs to pass to `query`.
+            let ora_params: Vec<Box<dyn oracle::sql_type::ToSql>> = binds_owned
+                .iter()
+                .map(oracle_bind_value)
+                .collect();
+            let param_refs: Vec<&dyn oracle::sql_type::ToSql> =
+                ora_params.iter().map(|b| b.as_ref()).collect();
 
-        let col_info: Vec<String> = rows_result
-            .column_info()
-            .iter()
-            .map(|info| info.name().to_string())
-            .collect();
+            let rows_result = conn.query(&sql_owned, &param_refs)
+                .map_err(|e| format!("Oracle query error: {}", e))?;
 
-        let columns = col_info.clone();
+            let col_info: Vec<String> = rows_result
+                .column_info()
+                .iter()
+                .map(|info| info.name().to_string())
+                .collect();
 
-        let json_rows: Vec<serde_json::Value> = rows_result
-            .filter_map(|r| r.ok())
-            .map(|row| {
-                let mut obj = serde_json::Map::new();
-                for col_name in &col_info {
-                    let val = oracle_value_to_json(&row, col_name);
-                    obj.insert(col_name.clone(), val);
-                }
-                serde_json::Value::Object(obj)
-            })
-            .take(MAX_ROWS)
-            .collect();
+            let columns = col_info.clone();
 
-        let row_count = json_rows.len();
+            let json_rows: Vec<serde_json::Value> = rows_result
+                .filter_map(|r| r.ok())
+                .map(|row| {
+                    let mut obj = serde_json::Map::new();
+                    for col_name in &col_info {
+                        let val = oracle_value_to_json(&row, col_name);
+                        obj.insert(col_name.clone(), val);
+                    }
+                    serde_json::Value::Object(obj)
+                })
+                .take(MAX_ROWS)
+                .collect();
+
+            let row_count = json_rows.len();
+            Ok(QueryResult { columns, rows: json_rows, row_count })
+        })();
+
+        let _ = conn.rollback();
         // Connection returns to the pool automatically on drop.
-        Ok(QueryResult { columns, rows: json_rows, row_count })
+        outcome
     })
     .await
     .map_err(|e| format!("Oracle spawn: {}", e))?

@@ -10,25 +10,46 @@ use crate::routes::auth::AuthUser;
 use crate::routes::ensure_admin;
 use crate::AppState;
 
-/// List all knowledge entries, optionally filtered by datasource_id.
+/// List knowledge entries the caller may see.
+///
+/// Scoped by datasource grants: these entries describe table semantics and
+/// business rules, so an unscoped listing handed every member the documented
+/// meaning of every connected database.
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<KnowledgeEntry>>, (StatusCode, String)> {
-    let entries = sqlx::query_as::<_, KnowledgeEntry>(
-        "SELECT * FROM knowledge_base ORDER BY datasource_id, category, id"
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(crate::routes::internal_error)?;
+    let allowed = crate::routes::datasources::accessible_ids(&state, &user).await?;
+    if allowed.is_empty() {
+        return Ok(Json(vec![]));
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(allowed.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT * FROM knowledge_base WHERE datasource_id IN ({placeholders})
+         ORDER BY datasource_id, category, id"
+    );
+    let mut q = sqlx::query_as::<_, KnowledgeEntry>(&sql);
+    for id in &allowed {
+        q = q.bind(id);
+    }
+    let entries = q
+        .fetch_all(&state.db)
+        .await
+        .map_err(crate::routes::internal_error)?;
 
     Ok(Json(entries))
 }
 
-/// List knowledge entries for a specific datasource.
+/// List knowledge entries for a specific datasource the caller has access to.
 pub async fn list_by_datasource(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(ds_id): Path<i32>,
 ) -> Result<Json<Vec<KnowledgeEntry>>, (StatusCode, String)> {
+    crate::routes::datasources::ensure_access(&state, ds_id, &user).await?;
     let entries = sqlx::query_as::<_, KnowledgeEntry>(
         "SELECT * FROM knowledge_base WHERE datasource_id = ? ORDER BY category, id"
     )

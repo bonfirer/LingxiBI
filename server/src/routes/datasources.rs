@@ -31,6 +31,30 @@ pub async fn has_access(
     Ok(row.is_some())
 }
 
+/// Every datasource id `user` may read: all of them for an admin, exactly the
+/// granted ones for a member.
+///
+/// An empty result means "this member may read nothing" and must be treated as
+/// such — never as "no filter needed". Use this anywhere a query would otherwise
+/// sweep across all datasources (AI context building, cross-datasource listings).
+pub async fn accessible_ids(
+    state: &AppState,
+    user: &AuthUser,
+) -> Result<Vec<i32>, (StatusCode, String)> {
+    let rows: Vec<(i32,)> = if user.is_admin {
+        sqlx::query_as("SELECT id FROM datasources")
+            .fetch_all(&state.db)
+            .await
+    } else {
+        sqlx::query_as("SELECT datasource_id FROM datasource_grants WHERE user_id = ?")
+            .bind(user.id)
+            .fetch_all(&state.db)
+            .await
+    }
+    .map_err(internal_error)?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// Enforce datasource access, returning 404 (not 403) so we don't reveal that a
 /// datasource the caller can't use exists. Call this from any path that reads
 /// data from, or runs SQL against, a datasource on behalf of a member.

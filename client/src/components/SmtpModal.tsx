@@ -13,7 +13,7 @@ export default function SmtpModal({ onClose }: { onClose: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [fromEmail, setFromEmail] = useState('');
-  const [fromName, setFromName] = useState('LingxiBI');
+  const [fromName, setFromName] = useState('HISENSE LingxiBI');
   const [useTls, setUseTls] = useState(true);
   const [enabled, setEnabled] = useState(false);
 

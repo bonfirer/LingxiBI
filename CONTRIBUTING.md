@@ -1,11 +1,11 @@
 # Contributing
 
-Thanks for your interest in improving LingxiBI!
+Thanks for your interest in improving HISENSE LingxiBI!
 
 ## Getting started
 
 1. Fork and clone the repository.
-2. Follow the local development steps in the [README](README.md#quick-start-local-development).
+2. Follow the local development steps in the [README](README.md#-quick-start-local-development).
 3. Create a feature branch: `git checkout -b feat/my-change`.
 
 ## Development workflow

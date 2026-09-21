@@ -130,7 +130,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: AuthUser) 
                     }
 
                     let outcome = {
-                        let chat_fut = handle_chat(&state, &mut sender, query, conversation_id, datasource_id, &lang);
+                        let chat_fut = handle_chat(&state, &mut sender, query, conversation_id, datasource_id, &lang, &user);
                         tokio::pin!(chat_fut);
 
                         let result;
@@ -234,6 +234,7 @@ async fn handle_chat(
     conversation_id: Option<i32>,
     datasource_id: Option<i32>,
     lang: &str,
+    user: &AuthUser,
 ) -> Result<(), String> {
     if query.is_empty() {
         return Err("Empty query".into());
@@ -263,7 +264,8 @@ async fn handle_chat(
             .await;
     }
 
-    let result = handle_chat_inner(state, sender, query, conversation_id, datasource_id, lang).await;
+    let result =
+        handle_chat_inner(state, sender, query, conversation_id, datasource_id, lang, user).await;
 
     // Record terminal status.
     if let Some(cid) = conversation_id {
@@ -296,6 +298,7 @@ async fn handle_chat_inner(
     conversation_id: Option<i32>,
     datasource_id: Option<i32>,
     lang: &str,
+    user: &AuthUser,
 ) -> Result<(), String> {
     if query.is_empty() {
         return Err("Empty query".into());
@@ -327,8 +330,8 @@ async fn handle_chat_inner(
         vec![]
     };
 
-    // 3. Build knowledge graph context
-    let kg_context = build_kg_context(state, datasource_id, query).await;
+    // 3. Build knowledge graph context (scoped to the caller's granted sources)
+    let kg_context = build_kg_context(state, datasource_id, query, user).await;
 
     // 4. Build system prompt
     let system = prompts::chat_system_prompt(&kg_context, lang);
@@ -397,7 +400,7 @@ async fn handle_chat_inner(
             crate::ai_log::log_ai_request(
                 &state.db, "chat", &llm_cfg.model,
                 chat_duration, "success", None,
-                Some(&format!("query={}", &query[..query.len().min(200)])),
+                Some(&format!("query={}", crate::truncate_chars(query, 200))),
                 Some(&format!("user: {}", query)),
                 Some(&f.content),
             ).await;
@@ -408,7 +411,7 @@ async fn handle_chat_inner(
             crate::ai_log::log_ai_request(
                 &state.db, "chat", &llm_cfg.model,
                 chat_duration, "failed", Some(&e),
-                Some(&format!("query={}", &query[..query.len().min(200)])),
+                Some(&format!("query={}", crate::truncate_chars(query, 200))),
                 Some(&format!("user: {}", query)),
                 None,
             ).await;
@@ -419,7 +422,7 @@ async fn handle_chat_inner(
             crate::ai_log::log_ai_request(
                 &state.db, "chat", &llm_cfg.model,
                 chat_duration, "failed", Some(&e.to_string()),
-                Some(&format!("query={}", &query[..query.len().min(200)])),
+                Some(&format!("query={}", crate::truncate_chars(query, 200))),
                 Some(&format!("user: {}", query)),
                 None,
             ).await;
@@ -449,7 +452,25 @@ async fn handle_chat_inner(
     if let Some(qs) = queries {
         for q in qs {
             let sql = q.get("sql").and_then(|v| v.as_str()).unwrap_or("");
-            let ds_id = q.get("datasource_id").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+            // The datasource is decided by the REQUEST, never by the model.
+            // Taking it from the LLM's JSON (defaulting to id 1) meant a
+            // prompt-injected or simply confused model could run SQL against a
+            // datasource the caller has no grant for — and omitting
+            // `datasource_id` from the request skipped the access check
+            // entirely. We only honour the model's choice when it matches the
+            // request, and fall back to the request's own value.
+            let ds_id = match datasource_id {
+                Some(id) => id,
+                None => {
+                    let _ = sender
+                        .send(WsMessage::Text(
+                            serde_json::json!({"type": "query_error", "sql": sql, "message": "Select a data source before running a query"})
+                                .to_string().into(),
+                        ))
+                        .await;
+                    continue;
+                }
+            };
             let label = q.get("label").and_then(|v| v.as_str()).unwrap_or("query");
             // Optional parameter definitions when the AI parameterized the SQL
             // (uses {{name}} / [[ ]] placeholders). Preview runs with defaults.
@@ -464,6 +485,23 @@ async fn handle_chat_inner(
                 let _ = sender
                     .send(WsMessage::Text(
                         serde_json::json!({"type": "query_error", "sql": sql, "message": e})
+                            .to_string().into(),
+                    ))
+                    .await;
+                continue;
+            }
+
+            // Re-check the grant immediately before execution. The ws-level
+            // check happens once per message; this makes the authorization
+            // adjacent to the actual query so future refactors can't separate
+            // them again.
+            if crate::routes::datasources::ensure_access(state, ds_id, user)
+                .await
+                .is_err()
+            {
+                let _ = sender
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type": "query_error", "sql": sql, "message": "Data source not found"})
                             .to_string().into(),
                     ))
                     .await;
@@ -829,26 +867,54 @@ async fn fix_sql_with_llm(
     Ok(sql)
 }
 
+/// Comma-separated `?` placeholders for an `IN (...)` list of `n` bound values.
+/// The count comes from Rust, never from user input, and every value is bound.
+fn in_placeholders(n: usize) -> String {
+    std::iter::repeat("?").take(n).collect::<Vec<_>>().join(", ")
+}
+
 /// Build knowledge graph context string from datasource schemas.
-/// If `datasource_id` is provided, only include that datasource's schema.
-/// Otherwise, include all schemas.
+///
+/// Scoped to what `user` is allowed to read: `datasource_id` narrows it to a
+/// single source, and `None` means "every datasource the caller has a grant for"
+/// — NOT every datasource in the system. That distinction matters because this
+/// context contains full table/column structure, business descriptions, the
+/// learned knowledge base and proven SQL; the unscoped version let a member with
+/// no grants read the structure of every connected database through chat.
+///
 /// `last_user_query` is used to rank few-shot examples by relevance.
-pub async fn build_kg_context(state: &AppState, datasource_id: Option<i32>, last_user_query: &str) -> String {
-    let schemas = if let Some(ds_id) = datasource_id {
-        sqlx::query_as::<_, (i32, serde_json::Value)>(
-            "SELECT s.datasource_id, s.schema_data FROM `schemas` s WHERE s.datasource_id = ?",
-        )
-        .bind(ds_id)
-        .fetch_all(&state.db)
-        .await
-    } else {
-        sqlx::query_as::<_, (i32, serde_json::Value)>(
+pub async fn build_kg_context(
+    state: &AppState,
+    datasource_id: Option<i32>,
+    last_user_query: &str,
+    user: &AuthUser,
+) -> String {
+    let allowed = match crate::routes::datasources::accessible_ids(state, user).await {
+        Ok(ids) => ids,
+        Err(_) => return "Unable to determine data source access.".into(),
+    };
+    // A requested datasource must be one the caller may read; otherwise fall
+    // back to nothing rather than silently widening scope.
+    let scope: Vec<i32> = match datasource_id {
+        Some(id) if allowed.contains(&id) => vec![id],
+        Some(_) => Vec::new(),
+        None => allowed,
+    };
+    if scope.is_empty() {
+        return "No accessible data source. Ask an administrator to grant access to one.".into();
+    }
+    let ph = in_placeholders(scope.len());
+
+    let schemas = {
+        let sql = format!(
             "SELECT s.datasource_id, s.schema_data FROM `schemas` s
-             JOIN datasources d ON d.id = s.datasource_id
-             ORDER BY s.created_at DESC",
-        )
-        .fetch_all(&state.db)
-        .await
+             WHERE s.datasource_id IN ({ph}) ORDER BY s.created_at DESC"
+        );
+        let mut q = sqlx::query_as::<_, (i32, serde_json::Value)>(&sql);
+        for id in &scope {
+            q = q.bind(id);
+        }
+        q.fetch_all(&state.db).await
     };
 
     match schemas {
@@ -953,21 +1019,16 @@ pub async fn build_kg_context(state: &AppState, datasource_id: Option<i32>, last
             } else {
                 // Append AI knowledge base entries (ranked by relevance + confidence,
                 // clamped to a budget so the learned context stays focused).
-                let knowledge = if let Some(ds_id) = datasource_id {
-                    sqlx::query_as::<_, (String, String, String, String)>(
-                        "SELECT category, title, content, confidence FROM knowledge_base WHERE datasource_id = ? ORDER BY category"
-                    )
-                    .bind(ds_id)
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_default()
-                } else {
-                    sqlx::query_as::<_, (String, String, String, String)>(
-                        "SELECT category, title, content, confidence FROM knowledge_base ORDER BY datasource_id, category"
-                    )
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_default()
+                let knowledge = {
+                    let sql = format!(
+                        "SELECT category, title, content, confidence FROM knowledge_base
+                         WHERE datasource_id IN ({ph}) ORDER BY datasource_id, category"
+                    );
+                    let mut q = sqlx::query_as::<_, (String, String, String, String)>(&sql);
+                    for id in &scope {
+                        q = q.bind(id);
+                    }
+                    q.fetch_all(&state.db).await.unwrap_or_default()
                 };
 
                 let knowledge = rank_knowledge(knowledge, last_user_query);
@@ -981,21 +1042,16 @@ pub async fn build_kg_context(state: &AppState, datasource_id: Option<i32>, last
                 // Metrics Library: curated, user-validated SQL with business-meaningful
                 // names. This is high-value knowledge — the AI should reuse these proven
                 // queries (and their definitions of business terms) when relevant.
-                let metrics: Vec<(String, Option<String>, String)> = if let Some(ds_id) = datasource_id {
-                    sqlx::query_as(
-                        "SELECT name, description, sql_query FROM metric_pools WHERE datasource_id = ? ORDER BY updated_at DESC LIMIT 50",
-                    )
-                    .bind(ds_id)
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_default()
-                } else {
-                    sqlx::query_as(
-                        "SELECT name, description, sql_query FROM metric_pools ORDER BY updated_at DESC LIMIT 50",
-                    )
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_default()
+                let metrics: Vec<(String, Option<String>, String)> = {
+                    let sql = format!(
+                        "SELECT name, description, sql_query FROM metric_pools
+                         WHERE datasource_id IN ({ph}) ORDER BY updated_at DESC LIMIT 50"
+                    );
+                    let mut q = sqlx::query_as(&sql);
+                    for id in &scope {
+                        q = q.bind(id);
+                    }
+                    q.fetch_all(&state.db).await.unwrap_or_default()
                 };
 
                 if !metrics.is_empty() {
@@ -1019,23 +1075,16 @@ pub async fn build_kg_context(state: &AppState, datasource_id: Option<i32>, last
                 }
 
                 // Load few-shot examples for this datasource — match by relevance to last user query
-                let examples = if let Some(ds_id) = datasource_id {
-                    // Get all examples for this datasource, then rank by keyword overlap
-                    let all_examples: Vec<(String, String)> = sqlx::query_as(
-                        "SELECT question, answer FROM ai_examples WHERE datasource_id = ? ORDER BY created_at DESC LIMIT 30"
-                    )
-                    .bind(ds_id)
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_default();
-                    rank_examples_by_relevance(all_examples, last_user_query)
-                } else {
-                    let all_examples: Vec<(String, String)> = sqlx::query_as(
-                        "SELECT question, answer FROM ai_examples ORDER BY created_at DESC LIMIT 30"
-                    )
-                    .fetch_all(&state.db)
-                    .await
-                    .unwrap_or_default();
+                let examples = {
+                    let sql = format!(
+                        "SELECT question, answer FROM ai_examples
+                         WHERE datasource_id IN ({ph}) ORDER BY created_at DESC LIMIT 30"
+                    );
+                    let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+                    for id in &scope {
+                        q = q.bind(id);
+                    }
+                    let all_examples = q.fetch_all(&state.db).await.unwrap_or_default();
                     rank_examples_by_relevance(all_examples, last_user_query)
                 };
 

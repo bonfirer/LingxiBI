@@ -132,7 +132,8 @@ pub async fn ai_generate(
 
     // Give the model this datasource's schema so it uses real table/columns.
     let schema_context =
-        crate::routes::chat::build_kg_context(&state, Some(req.datasource_id), &req.description).await;
+        crate::routes::chat::build_kg_context(&state, Some(req.datasource_id), &req.description, &user)
+            .await;
 
     let client = crate::llm::LlmClient::new(llm_cfg.base_url, llm_cfg.api_key, llm_cfg.model);
     let system = crate::llm::prompts::metric_generate_prompt(
@@ -260,15 +261,25 @@ pub async fn create(
     // metric saved from it keeps the placeholders working.
     let (result_cache, row_count, pool_params): (Option<serde_json::Value>, Option<i32>, Option<serde_json::Value>) =
         if let Some(source_id) = payload.source_pool_id {
+            // `data_pools` rows are created by whoever ran the query, and the
+            // table has no owner column — so gate on the pool's datasource and
+            // require it to match the metric being created. Otherwise a member
+            // could enumerate pool ids and read arbitrary users' cached result
+            // sets from datasources they were never granted.
             let pool = sqlx::query_as::<_, DataPool>("SELECT * FROM data_pools WHERE id = ?")
                 .bind(source_id)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(internal_error)?;
-            match pool {
-                Some(p) => (p.result_cache, p.row_count, p.params),
-                None => (None, None, None),
+                .map_err(internal_error)?
+                .ok_or((StatusCode::NOT_FOUND, "Source query not found".to_string()))?;
+            crate::routes::datasources::ensure_access(&state, pool.datasource_id, &user).await?;
+            if pool.datasource_id != payload.datasource_id {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Source query belongs to a different data source".to_string(),
+                ));
             }
+            (pool.result_cache, pool.row_count, pool.params)
         } else {
             (None, None, None)
         };

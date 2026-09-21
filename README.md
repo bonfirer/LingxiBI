@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="client/public/rlogo.png" alt="LingxiBI logo" width="120" />
+<img src="client/public/rlogo.png" alt="HISENSE LingxiBI logo" width="120" />
 
-# LingxiBI
+# HISENSE LingxiBI
 
 **Connect databases. Talk to your data. Let AI build the dashboards.**
 
@@ -14,17 +14,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-quick-start-with-docker-recommended)
+[![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![i18n](https://img.shields.io/badge/i18n-EN%20%7C%20中文-9cf)](#-features)
 
 <br/>
 
-[🚀 Live Demo](#-live-demo) · [⚡ Quick Start](#-quick-start-with-docker-recommended) · [✨ Features](#-features) · [🧠 How It Learns](#-how-it-learns) · [🏗️ Architecture](#️-architecture) · [📦 Deploy](#-production-deployment)
+[🚀 Live Demo](#-live-demo) · [⚡ Quick Start](#-quick-start-local-development) · [✨ Features](#-features) · [🧠 How It Learns](#-how-it-learns) · [🏗️ Architecture](#️-architecture) · [📦 Deploy](#-production-deployment)
 
 <br/>
 
-⭐ **If LingxiBI is useful to you, please [star it on GitHub](https://github.com/bonfirer/ai-report) — it really helps!**
+⭐ **If HISENSE LingxiBI is useful to you, please [star it on GitHub](https://github.com/bonfirer/ai-report) — it really helps!**
 
 <br/>
 
@@ -36,7 +36,7 @@
 
 ## 💡 Overview
 
-**LingxiBI** is a self-learning BI platform that turns raw databases into shareable, interactive dashboards — no SQL required, no traditional BI tool needed.
+**HISENSE LingxiBI** is a self-learning BI platform that turns raw databases into shareable, interactive dashboards — no SQL required, no traditional BI tool needed.
 
 Connect MySQL, PostgreSQL, or Oracle, then:
 
@@ -96,7 +96,7 @@ Connect MySQL, PostgreSQL, or Oracle, then:
 
 ## 🧠 How it learns
 
-Most text-to-SQL tools are stateless — they forget everything between questions. LingxiBI **accumulates per-datasource business knowledge** and feeds it back into every answer. The more your team uses it, the more accurate it becomes.
+Most text-to-SQL tools are stateless — they forget everything between questions. HISENSE LingxiBI **accumulates per-datasource business knowledge** and feeds it back into every answer. The more your team uses it, the more accurate it becomes.
 
 ```mermaid
 flowchart TD
@@ -165,31 +165,7 @@ flowchart TD
 
 ---
 
-## ⚡ Quick start with Docker (recommended)
-
-```bash
-docker compose up -d --build
-```
-
-Open **http://localhost:9528** → create the first admin account. Done.
-
-| Service | Role |
-|---------|------|
-| `db` | MySQL metadata store (internal only) |
-| `server` | Rust API on `:3001` (auto-generates JWT_SECRET on first run) |
-| `web` | Nginx on `:9528` — SPA + API proxy (incl. WebSocket) |
-
-```bash
-docker compose logs -f server     # follow API logs
-docker compose down               # stop (preserves data)
-docker compose down -v            # stop + wipe all data
-```
-
-> 🛡️ **Production:** set strong passwords in `.env`, set `CORS_ALLOWED_ORIGIN` to your real domain, and terminate TLS upstream.
-
----
-
-## 💻 Local development
+## ⚡ Quick start (local development)
 
 <details>
 <summary><b>Prerequisites</b></summary>
@@ -243,14 +219,21 @@ bash scripts/setup-server.sh [domain]
 
 Rust binary is built on the target host (no glibc mismatch). SPA is built locally and served as static files.
 
-> 💡 Docker Compose also works for production behind your own TLS proxy.
+`setup-server.sh` installs the toolchain, MySQL, Nginx and TLS, and drops an Nginx
+config that serves the SPA and reverse-proxies `/api/` (WebSocket included) to the
+API server on `127.0.0.1:3001`. See `deploy/nginx.standalone.conf` for the shape
+of that config.
+
+> 🛡️ **Production:** set `CORS_ALLOWED_ORIGIN` to your real origin, give each data
+> source a read-only database account, and serve the SPA over HTTPS — the browser
+> clipboard API (used by "share") is unavailable on plain HTTP.
 
 ---
 
 ## 🗂️ Project structure
 
 ```
-lingxibi/
+HISENSE LingxiBI/
 ├── client/                  React + Vite SPA
 │   └── src/
 │       ├── pages/           Route-level views
@@ -268,8 +251,7 @@ lingxibi/
 │   │   └── ...
 │   └── migrations/          SQL migrations (auto-run)
 ├── scripts/                 Deployment automation
-├── docker-compose.yml       One-command full stack
-└── .env.example             Environment template
+└── deploy/                  Nginx config for standalone deployment
 ```
 
 ---
@@ -292,7 +274,7 @@ lingxibi/
 
 ## 👥 Users & access control
 
-LingxiBI supports multiple users with two roles and a clear split between **shared infrastructure** and **personal work products**.
+HISENSE LingxiBI supports multiple users with two roles and a clear split between **shared infrastructure** and **personal work products**.
 
 **Roles**
 - **Admin** — manages shared infrastructure and can see/manage everything: data sources, the AI provider (LLM) config, SMTP/Feishu settings, the knowledge base, and user accounts.
@@ -323,7 +305,6 @@ Data sources are admin-managed. A member cannot see or query a data source until
 - [ ] Feishu Bitable (Base) sync
 - [ ] More notification channels (DingTalk, WeChat Work, Slack)
 - [x] Encryption-at-rest for stored credentials
-- [ ] Multi-arch Docker images (GHCR) on tagged releases
 - [ ] `SECURITY.md` + `CHANGELOG.md`
 - [ ] More chart types & dashboard templates
 

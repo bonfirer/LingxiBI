@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isAdmin } from '../lib/currentUser';
 import type {
   AlertRule,
   AlertLog,
@@ -87,7 +88,11 @@ export const useAlertStore = create<AlertStore>((set) => ({
     }
   },
 
+  // SMTP/Feishu delivery settings are shared infrastructure and the API now
+  // restricts reading them to admins. Skip the call for members rather than
+  // surfacing a 403 they can't act on.
   fetchSmtp: async () => {
+    if (!isAdmin()) return;
     try {
       const smtp = await alertsApi.getSmtp();
       set({ smtp });
@@ -108,6 +113,7 @@ export const useAlertStore = create<AlertStore>((set) => ({
   },
 
   fetchFeishu: async () => {
+    if (!isAdmin()) return;
     try {
       const feishu = await alertsApi.getFeishu();
       set({ feishu });

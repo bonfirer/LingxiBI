@@ -2,7 +2,7 @@
 set -e
 
 # ============================================
-# Deploy script for LingxiBI
+# Deploy script for HISENSE LingxiBI
 # Usage: ./scripts/deploy.sh user@host [domain]
 #
 # Architecture:
@@ -25,7 +25,7 @@ cd "$PROJECT_DIR"
 
 echo ""
 echo "  ┌─────────────────────────────┐"
-echo "  │  LingxiBI Deploy            │"
+echo "  │  HISENSE LingxiBI Deploy            │"
 echo "  └─────────────────────────────┘"
 echo ""
 
@@ -98,7 +98,7 @@ echo "      Binary ready: $($BIN --version 2>/dev/null || echo built)"
 echo "      Installing systemd service..."
 sudo tee /etc/systemd/system/ai-report.service > /dev/null <<EOF
 [Unit]
-Description=LingxiBI API server
+Description=HISENSE LingxiBI API server
 After=network.target mysql.service mysqld.service mariadb.service
 
 [Service]

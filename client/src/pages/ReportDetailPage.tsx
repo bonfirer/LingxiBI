@@ -16,13 +16,22 @@ import { DatasourceFilters } from '../components/DatasourceFilters';
 import { ReportFilters } from '../components/ReportFilters';
 import { ReportDebugPanel } from '../components/ReportDebugPanel';
 import { fetchEmbedToken, getCachedEmbedToken } from '../lib/embedToken';
+import { copyText } from '../lib/clipboard';
 import { toast } from '../stores/toastStore';
 
 /// Build a report HTML/data URL with an auth token appended (for iframe loading).
-/// Prefers a short-lived embed token so the long-lived session JWT never lands
-/// in a URL; falls back to the session token if the embed token isn't ready.
+///
+/// Only ever the short-lived, read-only embed token — never the session JWT.
+/// Tokens in URLs leak through browser history, referrer headers and access
+/// logs, so the one we put there must be scope-limited and expire quickly.
+/// Returns '' when no embed token is available yet; a background mint is kicked
+/// off and the effect below re-renders with the real src once it lands.
 function withToken(path: string): string {
-  const token = getCachedEmbedToken() || localStorage.getItem('token') || '';
+  const token = getCachedEmbedToken();
+  if (!token) {
+    void fetchEmbedToken();
+    return '';
+  }
   const sep = path.includes('?') ? '&' : '?';
   return `${path}${sep}token=${encodeURIComponent(token)}`;
 }
@@ -76,15 +85,20 @@ export default function ReportDetailPage() {
   const [htmlSourceSaving, setHtmlSourceSaving] = useState(false);
 
   // Mint a short-lived embed token on mount, then nudge a re-render so the
-  // iframe src is rebuilt using it instead of the session JWT.
+  // iframe src is rebuilt using it. Re-minted well before the ~30 minute expiry
+  // so a long-open report never falls back to a token-less (401) src.
   const [, setEmbedTick] = useState(0);
   useEffect(() => {
     let active = true;
-    fetchEmbedToken().then(() => {
-      if (active) setEmbedTick((n) => n + 1);
-    });
+    const mint = () =>
+      fetchEmbedToken().then(() => {
+        if (active) setEmbedTick((n) => n + 1);
+      });
+    mint();
+    const renew = setInterval(mint, 25 * 60 * 1000);
     return () => {
       active = false;
+      clearInterval(renew);
     };
   }, []);
 
@@ -412,12 +426,28 @@ export default function ReportDetailPage() {
     }
   };
 
+  // Share: mint/enable the public link, then put it on the clipboard.
+  //
+  // Both halves have to report failure. A rejected share call used to collapse
+  // to `null` and a clipboard write that threw (it does on plain http, where
+  // `navigator.clipboard` is undefined) took the whole handler down with it —
+  // either way the click produced no visible result at all. If the copy cannot
+  // happen we still show the URL so it can be copied out of the toast by hand.
   const handleShare = async () => {
     if (!report) return;
     const info = await reportsApi.share(report.id, true).catch(() => null);
-    if (info) {
-      await navigator.clipboard.writeText(window.location.origin + `/api/share/${info.share_token}/html`);
+    if (!info) {
+      toast.error(t('reportDetail.shareFailed'));
+      return;
+    }
+    // `info.url` is the SPA share route (`/share/<token>`), which wraps the
+    // report in the sandboxed viewer rather than handing out the raw
+    // `/api/share/.../html` endpoint.
+    const url = window.location.origin + info.url;
+    if (await copyText(url)) {
       toast.success(t('reportDetail.shareCopied'));
+    } else {
+      toast.info(`${t('reportDetail.shareCopyManual')} ${url}`);
     }
   };
 
@@ -796,11 +826,17 @@ export default function ReportDetailPage() {
               key={compareVersionId ? `ver-${compareVersionId}` : report?.updated_at}
               src={compareVersionId && report ? withToken(`/api/reports/${report.id}/versions/${compareVersionId}/html`) : iframeSrc}
               className="w-full h-full border-0"
-              // NOTE: allow-same-origin is required for the injected filter bar
-              // JS to fetch /data from the same origin. The browser warning about
-              // scripts + same-origin is expected and acceptable — the iframe
-              // content is trusted (served by our own API).
-              sandbox="allow-scripts allow-same-origin"
+              // Report HTML is LLM-authored (and editable via the HTML source
+              // panel), so it is untrusted. The security-critical part is the
+              // ABSENCE of allow-same-origin: that gives the document an opaque
+              // origin, so it cannot read this origin's localStorage (where the
+              // session JWT lives) or call our API as the logged-in user. Its
+              // own /data fetches work via the embed token in the URL.
+              // popups/forms/modals are allowed so dashboard links, forms and
+              // confirm dialogs keep working — none of them reach the parent
+              // origin. The server sends a matching `sandbox` CSP so this holds
+              // even if the URL is opened directly.
+              sandbox="allow-scripts allow-popups allow-forms allow-modals"
               title={report?.title}
               onLoad={() => setIframeLoading(false)}
             />

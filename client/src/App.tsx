@@ -34,8 +34,10 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null); // null = checking
 
   useEffect(() => {
-    // Handle GitHub OAuth redirect: pick up the token from the query string.
-    const params = new URLSearchParams(window.location.search);
+    // Handle GitHub OAuth redirect. The server returns the token in the URL
+    // fragment rather than the query string so it never reaches a server log or
+    // a Referer header; read it from the hash and scrub it immediately.
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const ghToken = params.get('github_token');
     if (ghToken) {
       localStorage.setItem('token', ghToken);

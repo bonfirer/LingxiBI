@@ -33,7 +33,7 @@ impl LlmClient {
             "stop": null,
         });
 
-        let client = reqwest::Client::new();
+        let client = crate::http::streaming_client();
         let resp = client
             .post(format!("{}/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
@@ -147,7 +147,7 @@ impl LlmClient {
             "temperature": temperature,
         });
 
-        let client = reqwest::Client::new();
+        let client = crate::http::llm_client();
         let resp = client
             .post(format!("{}/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
@@ -221,7 +221,7 @@ impl LlmClient {
             "temperature": temperature,
         });
 
-        let client = reqwest::Client::new();
+        let client = crate::http::llm_client();
         let resp = client
             .post(format!("{}/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))

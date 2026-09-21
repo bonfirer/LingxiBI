@@ -464,9 +464,14 @@ function LazyReportPreview({ report }: { report: Report }) {
           release();
           return;
         }
-        const token = embed || localStorage.getItem('token') || '';
+        if (!embed) {
+          // No fallback to the session JWT: it must never appear in a URL.
+          // Without a token the thumbnail just stays blank.
+          release();
+          return;
+        }
         setSrc(
-          `/api/reports/${report.id}/html?preview=1&token=${encodeURIComponent(token)}&t=${report.updated_at || ''}`
+          `/api/reports/${report.id}/html?preview=1&token=${encodeURIComponent(embed)}&t=${report.updated_at || ''}`
         );
         // Release the slot even if onLoad never fires (stalled/failed iframe).
         timeout = setTimeout(release, PREVIEW_LOAD_TIMEOUT_MS);
