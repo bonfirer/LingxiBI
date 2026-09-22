@@ -9,10 +9,12 @@ import {
   Sparkle,
   Plus,
   Star,
+  PencilSimple,
 } from '@phosphor-icons/react';
 import { useWebSocket, type WSMessage } from '../hooks/useWebSocket';
 import { useDataPoolStore, type UIDataPool } from '../stores/dataPoolStore';
 import { conversationsApi, datasourcesApi, metricsApi, type MetricPool, type DataSource } from '../lib/api';
+import { syncParams } from '../lib/metricParams';
 
 interface ChatMsg {
   id: string;
@@ -265,6 +267,14 @@ export default function AIPanel() {
     setStreaming(false);
   };
 
+  // A rejected save/update surfaces in the transcript, where the user is looking.
+  const handleSaveError = useCallback((message: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: `save-err-${Date.now()}`, role: 'system', content: message },
+    ]);
+  }, []);
+
   const formatRows = (n: number) => {
     if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
     return String(n);
@@ -419,7 +429,15 @@ export default function AIPanel() {
             </div>
             <div className="space-y-1">
               {pools.map((pool) => (
-                <PoolCard key={pool.id} pool={pool} formatRows={formatRows} t={t} />
+                <PoolCard
+                  key={pool.id}
+                  pool={pool}
+                  activeMetric={activeMetric}
+                  formatRows={formatRows}
+                  onError={handleSaveError}
+                  onUpdated={setActiveMetric}
+                  t={t}
+                />
               ))}
             </div>
           </div>
@@ -454,13 +472,24 @@ export default function AIPanel() {
 }
 
 // ── Pool Card with save-to-metrics ──
+//
+// On the metrics page the chat edits the metric that's open (`activeMetric`), so
+// the action updates it in place instead of adding a near-duplicate to the
+// library. Anywhere else there's nothing to update and the result is saved as a
+// new metric.
 function PoolCard({
   pool,
+  activeMetric,
   formatRows,
+  onError,
+  onUpdated,
   t,
 }: {
   pool: UIDataPool;
+  activeMetric: MetricPool | null;
   formatRows: (n: number) => string;
+  onError: (message: string) => void;
+  onUpdated: (metric: MetricPool) => void;
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
   const [saving, setSaving] = useState(false);
@@ -470,16 +499,35 @@ function PoolCard({
     if (saving || saved) return;
     setSaving(true);
     try {
-      await metricsApi.create({
-        name: pool.name,
-        sql_query: pool.sql_query,
-        datasource_id: pool.datasource_id,
-        source_pool_id: pool.id,
-      });
+      if (activeMetric) {
+        // The backend rejects an edit that drops or renames an output column,
+        // since reports built on this metric address columns by name.
+        const updated = await metricsApi.update(activeMetric.id, {
+          sql_query: pool.sql_query,
+          params: syncParams(pool.sql_query, activeMetric.params),
+        });
+        // Keep the panel's context in sync so a follow-up message is written
+        // against the SQL that is now stored, not the one it replaced.
+        onUpdated(updated);
+      } else {
+        await metricsApi.create({
+          name: pool.name,
+          sql_query: pool.sql_query,
+          datasource_id: pool.datasource_id,
+          source_pool_id: pool.id,
+        });
+      }
       setSaved(true);
       window.dispatchEvent(new Event('metrics-updated'));
-    } catch {
-      // silent
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      const marker = 'metric-columns-changed:';
+      const at = msg.indexOf(marker);
+      onError(
+        at !== -1
+          ? t('metrics.columnsChanged', { columns: msg.slice(at + marker.length).trim() })
+          : msg || t('errors.saveFailed')
+      );
     } finally {
       setSaving(false);
     }
@@ -500,14 +548,24 @@ function PoolCard({
         <button
           onClick={handleSave}
           disabled={saving || saved}
-          title={saved ? t('aiPanel.savedToMetrics') : t('aiPanel.saveToMetrics')}
+          title={
+            activeMetric
+              ? (saved
+                  ? t('aiPanel.metricUpdated', { name: activeMetric.name })
+                  : t('aiPanel.updateMetric', { name: activeMetric.name }))
+              : (saved ? t('aiPanel.savedToMetrics') : t('aiPanel.saveToMetrics'))
+          }
           className={`flex-shrink-0 transition-premium ${
             saved
               ? 'text-amber-500'
               : 'text-gray-600 hover:text-amber-500 opacity-0 group-hover:opacity-100'
           }`}
         >
-          <Star size={12} weight={saved ? 'fill' : 'regular'} />
+          {activeMetric ? (
+            <PencilSimple size={12} weight={saved ? 'fill' : 'regular'} />
+          ) : (
+            <Star size={12} weight={saved ? 'fill' : 'regular'} />
+          )}
         </button>
       </div>
     </div>

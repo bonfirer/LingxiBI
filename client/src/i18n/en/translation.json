@@ -419,6 +419,7 @@
     "needDatasource": "Configure a data source first",
     "favoritedAt": "Saved",
     "deleteInUse": "This metric is used by a report datasource and cannot be deleted. Remove it from the related report(s) first.",
+    "columnsChanged": "Not saved: the new SQL no longer returns {{columns}}. Report charts address data by column name, so dropping or renaming a column breaks them. Keep the existing columns (adding new ones is fine), or create a separate metric.",
     "groupNamePlaceholder": "Group name, e.g. Core KPIs",
     "ungrouped": "Ungrouped",
     "emptyGroup": "No metrics in this group yet",
@@ -532,7 +533,9 @@
     "thinking": "Thinking...",
     "analysisComplete": "Analysis complete",
     "saveToMetrics": "Save to Metrics",
-    "savedToMetrics": "Saved"
+    "savedToMetrics": "Saved",
+    "updateMetric": "Update metric \"{{name}}\"",
+    "metricUpdated": "Updated \"{{name}}\""
   },
   "assetPanel": {
     "dataSources": "Data Sources",

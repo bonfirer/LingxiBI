@@ -312,6 +312,85 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(metric)))
 }
 
+/// Column names a metric currently exposes, read from its cached rows. Every
+/// column is present on every row (NULLs serialize as `Value::Null`), so the
+/// first row's keys are the complete set. Empty when there is no cache yet.
+fn cached_columns(cache: &Option<serde_json::Value>) -> Vec<String> {
+    cache
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.as_object())
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Run a metric's edited SQL and enforce the stable-columns contract.
+///
+/// A metric's result columns are part of its public shape: generated report HTML
+/// hardcodes column names in its chart configs (only the data behind them gets
+/// swapped by `refreshData()`), and dataset/report filters match on them too. So
+/// the SQL behind a metric may change freely — different tables, conditions,
+/// aggregation — as long as every column it used to expose is still there.
+/// Adding columns is allowed; existing charts simply ignore them.
+///
+/// Returns the fresh result so the caller can reuse it as the new cache instead
+/// of running the query twice. Errors are 400: the caller must reject the edit
+/// without persisting anything.
+async fn validate_sql_change(
+    state: &AppState,
+    user: &AuthUser,
+    existing: &MetricPool,
+    new_sql: &str,
+    params: &Option<serde_json::Value>,
+) -> Result<QueryResult, (StatusCode, String)> {
+    // Access to the underlying datasource may have been revoked since creation.
+    crate::routes::datasources::ensure_access(state, existing.datasource_id, user).await?;
+
+    let ds = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+        .bind(existing.datasource_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(internal_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Data source not found".to_string()))?;
+
+    // `execute_metric_sql` validates read-only-ness and resolves `{{param}}`
+    // placeholders with the metric's new defaults. A broken edit fails here as a
+    // 400 rather than silently degrading the report's live-data path later.
+    let qr = query::execute_metric_sql(state, &ds, new_sql, &query::param_defaults(params), &[])
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    // Baseline = what the metric exposed before. Cached rows are the cheap
+    // source; with no cache (never refreshed) probe the previous SQL once. If
+    // that fails too there is no contract to enforce, so the edit goes through.
+    let mut baseline = cached_columns(&existing.result_cache);
+    if baseline.is_empty() {
+        let prev_defaults = query::param_defaults(&existing.params);
+        if let Ok(prev) =
+            query::execute_metric_sql(state, &ds, &existing.sql_query, &prev_defaults, &[]).await
+        {
+            baseline = prev.columns;
+        }
+    }
+
+    let missing: Vec<&str> = baseline
+        .iter()
+        .filter(|c| !qr.columns.contains(c))
+        .map(|c| c.as_str())
+        .collect();
+    if !missing.is_empty() {
+        // Sentinel prefix — the frontend maps it to a localized message listing
+        // the columns that would disappear.
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("metric-columns-changed:{}", missing.join(", ")),
+        ));
+    }
+
+    Ok(qr)
+}
+
 pub async fn update(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
@@ -328,6 +407,14 @@ pub async fn update(
     // changed so a plain rename/move stays a single cheap UPDATE.
     let sql_changed = new_sql != existing.sql_query;
 
+    // Check the edit before touching the row, so a rejected change leaves the
+    // metric exactly as it was.
+    let refreshed = if sql_changed {
+        Some(validate_sql_change(&state, &user, &existing, new_sql, &params).await?)
+    } else {
+        None
+    };
+
     sqlx::query("UPDATE metric_pools SET name=?, description=?, sql_query=?, group_id=?, params=?, updated_at=CURRENT_TIMESTAMP WHERE id=?")
         .bind(payload.name.as_deref().unwrap_or(&existing.name))
         .bind(payload.description.as_deref().or(existing.description.as_deref()))
@@ -339,10 +426,13 @@ pub async fn update(
         .await
         .map_err(internal_error)?;
 
-    if sql_changed {
-        // Own cached rows were produced by the previous statement — drop them so
-        // nothing stale is served before the next explicit refresh.
-        sqlx::query("UPDATE metric_pools SET result_cache=NULL, row_count=NULL WHERE id=?")
+    if let Some(qr) = refreshed {
+        // Reuse the validation run as the new cache — the old rows came from the
+        // previous statement, so they must not survive the edit.
+        let cache = serde_json::to_value(&qr.rows).ok();
+        sqlx::query("UPDATE metric_pools SET result_cache=?, row_count=? WHERE id=?")
+            .bind(&cache)
+            .bind(qr.row_count as i32)
             .bind(id)
             .execute(&state.db)
             .await

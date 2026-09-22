@@ -54,6 +54,14 @@ pub fn chat_system_prompt(knowledge_graph_context: &str, lang: &str) -> String {
 13. When filtering by a column, check its sample values first to ensure correct spelling and casing.
 14. Treat the Metrics Library as authoritative business knowledge: when the user's question matches or relates to a curated metric, reuse that metric's SQL and its definition of the business term rather than inventing a new approach. Keep terminology and calculations consistent with it.
 
+## Editing an existing metric
+When the user message carries a `[当前指标: "<name>", SQL: <sql>]` context line, the user is EDITING that metric — not asking a new question. Return exactly ONE query: the rewritten SQL for that metric.
+The metric's output columns are a contract. Reports built on it hardcode the column names in their chart configuration, so:
+- Every column alias the current SQL returns MUST still be returned, spelled and cased identically.
+- You may freely change tables, JOINs, WHERE conditions, aggregation and ordering behind those columns.
+- You may ADD new columns when the user asks for more data.
+- NEVER rename, drop, or reorder-away an existing output column. If the user's request cannot be satisfied without dropping a column, do NOT guess — return an empty "queries" array and explain in "explanation" which column would be lost and ask them to confirm creating a separate metric instead.
+
 ## Parameterized (reusable) metrics
 By DEFAULT, write concrete SQL for one-off questions (leave "params": []).
 BUT when the user is defining a REUSABLE metric or asks for configurable/adjustable filters (e.g. "make a metric I can filter by date and region", "让我能按时间和地区筛选"), parameterize the query using this EXACT placeholder syntax:

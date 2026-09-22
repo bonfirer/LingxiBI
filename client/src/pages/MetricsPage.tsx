@@ -25,23 +25,12 @@ import {
   type MetricGroup,
   type DataSource,
 } from '../lib/api';
+import { extractParamNames } from '../lib/metricParams';
 import { PageHeader, ErrorBanner, EmptyState, Select } from '../components/ui';
 
-/** Extract distinct `{{name}}` placeholder names from metric SQL (also matches
- *  placeholders inside `[[ ]]` optional blocks). */
-function extractParamNames(sql: string): string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  const re = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(sql)) !== null) {
-    if (!seen.has(m[1])) {
-      seen.add(m[1]);
-      names.push(m[1]);
-    }
-  }
-  return names;
-}
+/** Marks `metrics-updated` events this page dispatched, so its own listener can
+ *  tell them apart from edits made elsewhere (e.g. the AI panel). */
+const METRICS_PAGE_EVENT_SOURCE = 'metrics-page';
 
 export default function MetricsPage() {
   const { t, i18n } = useTranslation();
@@ -121,10 +110,13 @@ export default function MetricsPage() {
     }
   }, [t]);
 
-  // Notify sidebar to refresh after data changes
+  // Notify sidebar to refresh after data changes. Tagged with the source so this
+  // page's own listener can ignore it instead of re-fetching what it just got.
   const fetchAllAndNotify = useCallback(async () => {
     await fetchAll();
-    window.dispatchEvent(new Event('metrics-updated'));
+    window.dispatchEvent(
+      new CustomEvent('metrics-updated', { detail: { source: METRICS_PAGE_EVENT_SOURCE } })
+    );
   }, [fetchAll]);
 
   // Guard against duplicate initial loads: react-i18next's `t` identity can
@@ -137,16 +129,58 @@ export default function MetricsPage() {
     fetchAll();
   }, [fetchAll]);
 
+  // Show a metric's cached rows in the detail table.
+  const applyMetricCache = useCallback((metric: MetricPool) => {
+    const rows = Array.isArray(metric.result_cache) ? metric.result_cache as Record<string, unknown>[] : [];
+    setDetailData(metric.result_cache ? { columns: rows.length > 0 ? Object.keys(rows[0]) : [], rows } : null);
+  }, []);
+
+  // A metric's output columns are a contract: reports hardcode the column names
+  // in their charts, so the backend refuses an edit that drops or renames one
+  // and answers with a `metric-columns-changed:<cols>` sentinel.
+  const describeSaveError = useCallback((e: unknown): string => {
+    const msg = e instanceof Error ? e.message : '';
+    const marker = 'metric-columns-changed:';
+    const at = msg.indexOf(marker);
+    if (at !== -1) {
+      return t('metrics.columnsChanged', { columns: msg.slice(at + marker.length).trim() });
+    }
+    return msg || t('errors.saveFailed');
+  }, [t]);
+
+  // Sequence number of the newest detail request; responses from superseded
+  // requests are dropped so switching metrics quickly can't render stale rows.
+  const detailRequestRef = useRef(0);
+
+  // The metrics *list* no longer includes the heavy `result_cache`, so the
+  // single metric is fetched here to get its cached rows, falling back to the
+  // source data pool for one that has never been refreshed.
+  const loadDetail = useCallback(async (id: number) => {
+    const seq = ++detailRequestRef.current;
+    setDetailLoading(true);
+    try {
+      const full = await metricsApi.get(id);
+      if (seq !== detailRequestRef.current) return;
+      if (!full.result_cache && full.source_pool_id) {
+        const pool = await queryApi.getPool(full.source_pool_id);
+        if (seq !== detailRequestRef.current) return;
+        applyMetricCache({ ...full, result_cache: pool.result_cache });
+      } else {
+        applyMetricCache(full);
+      }
+    } catch {
+      if (seq === detailRequestRef.current) setDetailData(null);
+    } finally {
+      if (seq === detailRequestRef.current) setDetailLoading(false);
+    }
+  }, [applyMetricCache]);
+
   // Tracks which metric id's detail has already been fetched, to dedup
   // duplicate requests from StrictMode's dev double-invoke and same-id
   // re-renders.
   const loadedDetailIdRef = useRef<number | null>(null);
-  // Load detail data when the selected metric changes.
-  //
-  // The metrics *list* no longer includes the heavy `result_cache`, so we fetch
-  // the single metric here to get its cached rows (falling back to its source
-  // data pool). Keyed on `selectedId` (a primitive) so this doesn't re-run on
-  // every background list refresh.
+  // Load detail data when the selected metric changes. Keyed on `selectedId`
+  // (a primitive) so this doesn't re-run on every background list refresh.
   useEffect(() => {
     setPage(1); // Reset pagination
     if (!selectedId) {
@@ -158,33 +192,21 @@ export default function MetricsPage() {
     // in dev, or unrelated re-renders that keep the same selectedId).
     if (loadedDetailIdRef.current === selectedId) return;
     loadedDetailIdRef.current = selectedId;
-    let cancelled = false;
-    setDetailLoading(true);
-    metricsApi.get(selectedId)
-      .then(async (full) => {
-        if (cancelled) return;
-        if (full.result_cache) {
-          const rows = Array.isArray(full.result_cache) ? full.result_cache as Record<string, unknown>[] : [];
-          const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-          setDetailData({ columns, rows });
-        } else if (full.source_pool_id) {
-          const pool = await queryApi.getPool(full.source_pool_id);
-          if (cancelled) return;
-          if (pool.result_cache) {
-            const rows = Array.isArray(pool.result_cache) ? pool.result_cache as Record<string, unknown>[] : [];
-            const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-            setDetailData({ columns, rows });
-          } else {
-            setDetailData(null);
-          }
-        } else {
-          setDetailData(null);
-        }
-      })
-      .catch(() => { if (!cancelled) setDetailData(null); })
-      .finally(() => { if (!cancelled) setDetailLoading(false); });
-    return () => { cancelled = true; };
-  }, [selectedId]);
+    loadDetail(selectedId);
+  }, [selectedId, loadDetail]);
+
+  // The AI panel can rewrite the open metric's SQL, so pick up edits made
+  // outside this page. Events this page dispatched itself are skipped — the
+  // local handler already refreshed.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      if ((e as CustomEvent<{ source?: string }>).detail?.source === METRICS_PAGE_EVENT_SOURCE) return;
+      fetchAll();
+      if (selectedId) loadDetail(selectedId);
+    };
+    window.addEventListener('metrics-updated', handler);
+    return () => window.removeEventListener('metrics-updated', handler);
+  }, [fetchAll, loadDetail, selectedId]);
 
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) return;
@@ -314,12 +336,7 @@ export default function MetricsPage() {
       setRefreshing(true);
       const updated = await metricsApi.refresh(selectedMetric.id);
       await fetchAllAndNotify();
-      // Update detail data
-      if (updated.result_cache) {
-        const rows = Array.isArray(updated.result_cache) ? updated.result_cache as Record<string, unknown>[] : [];
-        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-        setDetailData({ columns, rows });
-      }
+      applyMetricCache(updated);
     } catch (e) {
       setError(e instanceof Error ? e.message : t('errors.refreshFailed'));
     } finally {
@@ -365,19 +382,18 @@ export default function MetricsPage() {
         const existing = new Map((selectedMetric.params ?? []).map((p) => [p.name, p]));
         params = names.map((n) => existing.get(n) ?? { name: n });
       }
-      await metricsApi.update(selectedMetric.id, {
+      // The backend re-runs the edited SQL to enforce the stable-columns
+      // contract, and returns the refreshed cache — no extra refresh needed.
+      const updated = await metricsApi.update(selectedMetric.id, {
         sql_query: editSql.trim(),
         params: params.length ? params : null,
       });
       setEditParams(null);
       setEditingSql(false);
       await fetchAllAndNotify();
-      // Saving new SQL drops the metric's cached rows server-side (they belong
-      // to the previous statement), so re-run it to repopulate the preview.
-      // Surfaces a refresh error if the edited SQL no longer executes.
-      await handleRefresh();
+      applyMetricCache(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('errors.saveFailed'));
+      setError(describeSaveError(e));
     }
   };
 
