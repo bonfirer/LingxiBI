@@ -53,6 +53,106 @@ async fn load_report_filters(
     Ok(row.and_then(|(v,)| v))
 }
 
+/// Push a metric's edited SQL down to every report dataset linked to it.
+///
+/// Report datasets hold their own copy of `sql_query`, taken when the metric was
+/// added to the report. Without this, editing SQL in the metric library would
+/// never reach existing reports — they would keep running the original query
+/// forever. Called from `metric_pools::update` after the new SQL is persisted.
+///
+/// For each affected dataset the SQL is rewritten, then re-executed with that
+/// dataset's stored filters and the metric's (already updated) parameter
+/// defaults so `result_cache` matches the new query. When the new SQL fails to
+/// run, the cache is *cleared* rather than left alone: those rows came from a
+/// different query, so continuing to serve them would be wrong. Parent reports
+/// get `updated_at` bumped so clients stop reusing the cached report HTML.
+///
+/// Per-dataset failures are non-fatal — a broken or unreachable datasource must
+/// not block saving the metric.
+pub async fn propagate_metric_sql(
+    state: &AppState,
+    metric_id: i32,
+    new_sql: &str,
+) -> Result<(), (StatusCode, String)> {
+    let datasets = sqlx::query_as::<_, ReportDataSource>(
+        "SELECT * FROM report_datasources WHERE metric_id = ?",
+    )
+    .bind(metric_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(internal_error)?;
+
+    if datasets.is_empty() {
+        return Ok(());
+    }
+
+    sqlx::query("UPDATE report_datasources SET sql_query = ? WHERE metric_id = ?")
+        .bind(new_sql)
+        .bind(metric_id)
+        .execute(&state.db)
+        .await
+        .map_err(internal_error)?;
+
+    // The metric's params were just updated, so defaults are re-read once here
+    // and shared by every dataset (they all point at the same metric).
+    let param_values = metric_defaults(state, Some(metric_id)).await;
+
+    // Datasets of the same report share global filters; fetch each report once.
+    let mut report_filters: std::collections::HashMap<i32, Option<serde_json::Value>> =
+        std::collections::HashMap::new();
+
+    for ds in &datasets {
+        let globals = match report_filters.get(&ds.report_id) {
+            Some(v) => v.clone(),
+            None => {
+                let v = load_report_filters(state, ds.report_id).await?;
+                report_filters.insert(ds.report_id, v.clone());
+                v
+            }
+        };
+
+        let source = sqlx::query_as::<_, DataSource>("SELECT * FROM datasources WHERE id = ?")
+            .bind(ds.datasource_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(internal_error)?;
+
+        // `execute_metric_sql` validates the statement itself, so an edit that
+        // is no longer read-only just fails here and clears the cache.
+        let fresh = match source {
+            Some(source) => {
+                let filters =
+                    query::combined_filters(parse_filters(ds), &globals, ds.datasource_id);
+                query::execute_metric_sql(state, &source, new_sql, &param_values, &filters)
+                    .await
+                    .ok()
+            }
+            None => None,
+        };
+
+        let (cache, row_count) = match fresh {
+            Some(qr) => (serde_json::to_value(&qr.rows).ok(), Some(qr.row_count as i32)),
+            None => (None, None),
+        };
+
+        let _ = sqlx::query("UPDATE report_datasources SET result_cache=?, row_count=? WHERE id=?")
+            .bind(&cache)
+            .bind(row_count)
+            .bind(ds.id)
+            .execute(&state.db)
+            .await;
+    }
+
+    for report_id in report_filters.keys() {
+        let _ = sqlx::query("UPDATE reports SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(report_id)
+            .execute(&state.db)
+            .await;
+    }
+
+    Ok(())
+}
+
 /// Verify the caller owns the parent report (admins bypass). 404 otherwise.
 async fn ensure_report_owned(
     state: &AppState,

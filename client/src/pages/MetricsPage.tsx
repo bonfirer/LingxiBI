@@ -372,6 +372,10 @@ export default function MetricsPage() {
       setEditParams(null);
       setEditingSql(false);
       await fetchAllAndNotify();
+      // Saving new SQL drops the metric's cached rows server-side (they belong
+      // to the previous statement), so re-run it to repopulate the preview.
+      // Surfaces a refresh error if the edited SQL no longer executes.
+      await handleRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : t('errors.saveFailed'));
     }

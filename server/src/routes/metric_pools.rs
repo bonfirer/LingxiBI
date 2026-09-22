@@ -322,16 +322,36 @@ pub async fn update(
 
     // params: use the provided value if present, else keep the existing one.
     let params = payload.params.clone().or_else(|| existing.params.clone());
+    let new_sql = payload.sql_query.as_deref().unwrap_or(&existing.sql_query);
+    // The metric library is the source of truth for its SQL, but report datasets
+    // keep a copy taken at link time. Track whether the statement actually
+    // changed so a plain rename/move stays a single cheap UPDATE.
+    let sql_changed = new_sql != existing.sql_query;
+
     sqlx::query("UPDATE metric_pools SET name=?, description=?, sql_query=?, group_id=?, params=?, updated_at=CURRENT_TIMESTAMP WHERE id=?")
         .bind(payload.name.as_deref().unwrap_or(&existing.name))
         .bind(payload.description.as_deref().or(existing.description.as_deref()))
-        .bind(payload.sql_query.as_deref().unwrap_or(&existing.sql_query))
+        .bind(new_sql)
         .bind(payload.group_id.or(existing.group_id))
         .bind(&params)
         .bind(id)
         .execute(&state.db)
         .await
         .map_err(internal_error)?;
+
+    if sql_changed {
+        // Own cached rows were produced by the previous statement — drop them so
+        // nothing stale is served before the next explicit refresh.
+        sqlx::query("UPDATE metric_pools SET result_cache=NULL, row_count=NULL WHERE id=?")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(internal_error)?;
+
+        // Fan the new SQL out to every report dataset linked to this metric.
+        // Runs after the UPDATE above so the new params are already visible.
+        crate::routes::report_datasources::propagate_metric_sql(&state, id, new_sql).await?;
+    }
 
     let metric = sqlx::query_as::<_, MetricPool>("SELECT * FROM metric_pools WHERE id = ?")
         .bind(id)
